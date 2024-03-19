@@ -1,6 +1,8 @@
 package dns
 
-import "bytes"
+import (
+	"bytes"
+)
 
 type DNSResourceRecordCNAME struct {
 	DNSResourceRecord
