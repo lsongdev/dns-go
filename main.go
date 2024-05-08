@@ -3,34 +3,35 @@ package main
 import (
 	"log"
 
-	"github.com/song940/dns-go/dns"
+	"github.com/song940/dns-go/client"
+	"github.com/song940/dns-go/packet"
 )
 
-func printRecord(record dns.DNSResource) {
+func printRecord(record packet.DNSResource) {
 	switch record.GetType() {
-	case dns.DNSTypeA:
-		a := record.(*dns.DNSResourceRecordA)
+	case packet.DNSTypeA:
+		a := record.(*packet.DNSResourceRecordA)
 		println(a.Type, a.Name, a.Address)
-	case dns.DNSTypeAAAA:
-		aaaa := record.(*dns.DNSResourceRecordAAAA)
+	case packet.DNSTypeAAAA:
+		aaaa := record.(*packet.DNSResourceRecordAAAA)
 		println(aaaa.Name, aaaa.Address)
-	case dns.DNSTypeSOA:
-		soa := record.(*dns.DNSResourceRecordSOA)
+	case packet.DNSTypeSOA:
+		soa := record.(*packet.DNSResourceRecordSOA)
 		println(soa.Name, soa.MName, soa.RName, soa.Serial)
-	case dns.DNSTypeTXT:
-		txt := record.(*dns.DNSResourceRecordTXT)
+	case packet.DNSTypeTXT:
+		txt := record.(*packet.DNSResourceRecordTXT)
 		println(txt.Name, txt.Content)
 	}
 }
 
 func main() {
-	client := dns.NewClient()
-	query := dns.NewPacket()
+	c := client.NewUDPClient()
+	query := packet.NewPacket()
 	// query.AddQuestionA("lsong.org")
 	// query.AddQuestionAAAA("lsong.org")
 	// query.AddQuestionCNAME("lsong.org")
 	query.AddQuestionTXT("lsong.org")
-	res, err := client.Query(query)
+	res, err := c.Query(query)
 	if err != nil {
 		panic(err)
 	}

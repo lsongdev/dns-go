@@ -1,11 +1,13 @@
-package dns
+package server
 
 import (
 	"log"
 	"net"
+
+	"github.com/song940/dns-go/packet"
 )
 
-type Handler func(*DNSPacket) *DNSPacket
+type Handler func(*packet.DNSPacket) *packet.DNSPacket
 
 func ListenAndServe(addr string, handler Handler) error {
 	conn, err := net.ListenPacket("udp", addr)
@@ -20,7 +22,7 @@ func ListenAndServe(addr string, handler Handler) error {
 			log.Printf("Error reading packet: %v", err)
 			continue
 		}
-		req, err := FromBytes(buf[:n])
+		req, err := packet.FromBytes(buf[:n])
 		if err != nil {
 			log.Printf("Error decoding packet: %v", err)
 			continue
