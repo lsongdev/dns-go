@@ -21,3 +21,7 @@ func (d *DNSResourceRecordAAAA) Decode(reader *bytes.Reader, length uint16) {
 func (d *DNSResourceRecordAAAA) Encode() []byte {
 	return net.ParseIP(d.Address).To16()
 }
+
+func (a *DNSResourceRecordAAAA) Bytes() []byte {
+	return a.WrapData(a.Encode())
+}

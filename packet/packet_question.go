@@ -39,7 +39,8 @@ func (q *DNSQuestion) Parse(reader *bytes.Reader) error {
 
 func (q *DNSQuestion) Bytes() []byte {
 	var buf bytes.Buffer
-	encodeDomainName(&buf, q.Name)
+	// Encode domain name
+	encodeDomainName(&buf, q.Name, true)
 	// Encode type
 	typeBytes := make([]byte, 2)
 	binary.BigEndian.PutUint16(typeBytes, uint16(q.Type))
@@ -51,16 +52,17 @@ func (q *DNSQuestion) Bytes() []byte {
 	return buf.Bytes()
 }
 
-func encodeDomainName(buf *bytes.Buffer, name string) {
-	labels := strings.Split(name, ".")
+func encodeDomainName(buf *bytes.Buffer, domain string, addNullTerminator bool) {
+	labels := strings.Split(domain, ".")
 	for _, label := range labels {
 		// Write label length
 		buf.WriteByte(byte(len(label)))
 		// Write label content
 		buf.WriteString(label)
 	}
-	// Write null terminator
-	buf.WriteByte(0x00)
+	if addNullTerminator {
+		buf.WriteByte(0x00)
+	}
 }
 
 func decodeDomainName(reader *bytes.Reader) (name string, err error) {

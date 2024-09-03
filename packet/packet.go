@@ -80,7 +80,13 @@ func FromBytes(data []byte) (d *DNSPacket, err error) {
 
 func (packet *DNSPacket) Bytes() []byte {
 	var buf bytes.Buffer
+
+	packet.Header.QDCount = uint16(len(packet.Questions))
+	packet.Header.ANCount = uint16(len(packet.Answers))
+	packet.Header.NSCount = uint16(len(packet.Authorities))
+	packet.Header.ARCount = uint16(len(packet.Additionals))
 	buf.Write(packet.Header.Bytes())
+
 	for _, question := range packet.Questions {
 		buf.Write(question.Bytes())
 	}

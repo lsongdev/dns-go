@@ -12,30 +12,30 @@ type DNSType uint16
 
 // https://datatracker.ietf.org/doc/html/rfc1035#section-3.2.2
 const (
-	DNSTypeA     DNSType = 0x01 // a host address
-	DNSTypeNS    DNSType = 0x02 // an authoritative name server
-	DNSTypeMD    DNSType = 0x03 // a mail destination (Obsolete - use MX)
-	DNSTypeMF    DNSType = 0x04 // a mail forwarder (Obsolete - use MX)
-	DNSTypeCNAME DNSType = 0x05 // the canonical name for an alias
-	DNSTypeSOA   DNSType = 0x06 // marks the start of a zone of authority
-	DNSTypeMB    DNSType = 0x07 // a mailbox domain name (EXPERIMENTAL)
-	DNSTypeMG    DNSType = 0x08 // a mail group member (EXPERIMENTAL)
-	DNSTypeMR    DNSType = 0x09 // a mail rename domain name (EXPERIMENTAL)
-	DNSTypeNULL  DNSType = 0x0A // a null RR (EXPERIMENTAL)
-	DNSTypeWKS   DNSType = 0x0B // a well known service description
-	DNSTypePTR   DNSType = 0x0C // a domain name pointer
-	DNSTypeHINFO DNSType = 0x0D // host information
-	DNSTypeMINFO DNSType = 0x0E // mailbox or mail list information
-	DNSTypeMX    DNSType = 0x0F // mail exchange
-	DNSTypeTXT   DNSType = 0x10 // text strings
-	DNSTypeAAAA  DNSType = 0x1C // a ipv6 host address
-	DNSTypeSRV   DNSType = 0x21 // a service location
-	DNSTypeEDNS  DNSType = 0x29 // extensible dns
-	DNSTypeSPF   DNSType = 0x63 // a Sender Policy Framework record
-	DNSTypeAXFR  DNSType = 0xFC // A request for a transfer of an entire zone
-	DNSTypeMAILB DNSType = 0xFD // A request for mailbox-related records (MB, MG or MR)
-	DNSTypeMAILA DNSType = 0xFE // A request for mail agent RRs (Obsolete - see MX)
-	DNSTypeAny   DNSType = 0xFF // A request for all records
+	DNSTypeA     DNSType = 0x0001 // a host address
+	DNSTypeNS    DNSType = 0x0002 // an authoritative name server
+	DNSTypeMD    DNSType = 0x0003 // a mail destination (Obsolete - use MX)
+	DNSTypeMF    DNSType = 0x04   // a mail forwarder (Obsolete - use MX)
+	DNSTypeCNAME DNSType = 0x05   // the canonical name for an alias
+	DNSTypeSOA   DNSType = 0x06   // marks the start of a zone of authority
+	DNSTypeMB    DNSType = 0x07   // a mailbox domain name (EXPERIMENTAL)
+	DNSTypeMG    DNSType = 0x08   // a mail group member (EXPERIMENTAL)
+	DNSTypeMR    DNSType = 0x09   // a mail rename domain name (EXPERIMENTAL)
+	DNSTypeNULL  DNSType = 0x0A   // a null RR (EXPERIMENTAL)
+	DNSTypeWKS   DNSType = 0x0B   // a well known service description
+	DNSTypePTR   DNSType = 0x0C   // a domain name pointer
+	DNSTypeHINFO DNSType = 0x0D   // host information
+	DNSTypeMINFO DNSType = 0x0E   // mailbox or mail list information
+	DNSTypeMX    DNSType = 0x0F   // mail exchange
+	DNSTypeTXT   DNSType = 0x10   // text strings
+	DNSTypeAAAA  DNSType = 0x1C   // a ipv6 host address
+	DNSTypeSRV   DNSType = 0x21   // a service location
+	DNSTypeEDNS  DNSType = 0x29   // extensible dns
+	DNSTypeSPF   DNSType = 0x63   // a Sender Policy Framework record
+	DNSTypeAXFR  DNSType = 0xFC   // A request for a transfer of an entire zone
+	DNSTypeMAILB DNSType = 0xFD   // A request for mailbox-related records (MB, MG or MR)
+	DNSTypeMAILA DNSType = 0xFE   // A request for mail agent RRs (Obsolete - see MX)
+	DNSTypeAny   DNSType = 0xFF   // A request for all records
 )
 
 // DNSClass defines the class associated with a request/response.  Different DNS
@@ -178,6 +178,10 @@ func ParseResource(reader *bytes.Reader) (record DNSResource, err error) {
 		record = &DNSResourceRecordCNAME{
 			DNSResourceRecord: r,
 		}
+	case DNSTypeEDNS:
+		record = &DNSResourceRecordEDNS{
+			DNSResourceRecord: r,
+		}
 	default:
 		err = fmt.Errorf("unknown resource record type: %d", r.Type)
 		return
@@ -196,23 +200,21 @@ func ParseResource(reader *bytes.Reader) (record DNSResource, err error) {
 	return
 }
 
-func (r *DNSResourceRecord) Encode() []byte {
-	panic("unimplemented")
-}
-
-func (r *DNSResourceRecord) Bytes() []byte {
+func (r *DNSResourceRecord) WrapData(rdData []byte) []byte {
 	var buf bytes.Buffer
-	buf.WriteString(r.Name)
+	// Encode domain name
+	encodeDomainName(&buf, r.Name, false)
+	// Encode type
 	binary.Write(&buf, binary.BigEndian, r.Type)
+	// Encode class
 	binary.Write(&buf, binary.BigEndian, r.Class)
+	// Encode TTL
 	binary.Write(&buf, binary.BigEndian, r.TTL)
-	// RDATA
-	rdData := r.Encode()
 	// RDLENGTH (2 bytes)
 	rdLength := uint16(len(rdData))
-	buf.WriteByte(byte(rdLength >> 8))
-	buf.WriteByte(byte(rdLength))
-	// // Write Data
+	binary.Write(&buf, binary.BigEndian, rdLength)
+
+	// Write Data
 	buf.Write(rdData)
 	return buf.Bytes()
 }

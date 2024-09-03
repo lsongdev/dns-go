@@ -1,8 +1,6 @@
 package client
 
 import (
-	"fmt"
-	"log"
 	"net"
 	"time"
 
@@ -10,17 +8,19 @@ import (
 )
 
 type UDPClient struct {
+	Server  string
 	Timeout time.Duration
 }
 
-func NewUDPClient() *UDPClient {
+func NewUDPClient(server string) *UDPClient {
 	return &UDPClient{
+		Server:  server,
 		Timeout: 5 * time.Second,
 	}
 }
 
 func (client *UDPClient) Query(req *packet.DNSPacket) (res *packet.DNSPacket, err error) {
-	conn, err := net.Dial("udp", "8.8.8.8:53")
+	conn, err := net.Dial("udp", client.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -34,6 +34,6 @@ func (client *UDPClient) Query(req *packet.DNSPacket) (res *packet.DNSPacket, er
 	if err != nil {
 		return nil, err
 	}
-	log.Println("dns response", n, fmt.Sprintf("%x", buf[:n]))
+	// log.Println("dns response", n, fmt.Sprintf("%x", buf[:n]))
 	return packet.FromBytes(buf[:n])
 }

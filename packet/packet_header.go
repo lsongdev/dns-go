@@ -29,14 +29,14 @@ const (
 
 type DNSHeader struct {
 	ID      uint16
-	QR      uint8
-	OpCode  uint8
-	AA      uint8
-	TC      uint8
-	RD      uint8
-	RA      uint8
-	Z       uint8
-	RCode   uint8
+	QR      uint8  // 0: query, 1: response
+	OpCode  uint8  // 0: standard query, 1: inverse query, 2: server status request, 3-15: reserved
+	AA      uint8  // 0: not authoritative, 1: authoritative
+	TC      uint8  // 0: truncated, 1: not truncated
+	RD      uint8  // 0: recursion desired, 1: recursion not desired
+	RA      uint8  // 0: recursion available, 1: recursion not available
+	Z       uint8  // 0: reserved, 1-255: code
+	RCode   uint8  // 0: no error, 1: format error, 2: server failure, 3: name error, 4: not implemented, 5: refused, 6-15: reserved
 	QDCount uint16 // Number of questions to expect
 	ANCount uint16 // Number of answers to expect
 	NSCount uint16 // Number of authorities to expect

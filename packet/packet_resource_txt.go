@@ -24,3 +24,7 @@ func (d *DNSResourceRecordTXT) Encode() []byte {
 	buf.Write([]byte(d.Content))
 	return buf.Bytes()
 }
+
+func (a *DNSResourceRecordTXT) Bytes() []byte {
+	return a.WrapData(a.Encode())
+}

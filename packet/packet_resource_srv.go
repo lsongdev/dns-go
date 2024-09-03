@@ -29,6 +29,10 @@ func (d *DNSResourceRecordSRV) Encode() []byte {
 	binary.Write(&buf, binary.BigEndian, d.Priority)
 	binary.Write(&buf, binary.BigEndian, d.Weight)
 	binary.Write(&buf, binary.BigEndian, d.Port)
-	encodeDomainName(&buf, d.Target)
+	encodeDomainName(&buf, d.Target, false)
 	return buf.Bytes()
+}
+
+func (a *DNSResourceRecordSRV) Bytes() []byte {
+	return a.WrapData(a.Encode())
 }
