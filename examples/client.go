@@ -25,16 +25,16 @@ func printRecord(record packet.DNSResource) {
 }
 
 func RunClient() {
-	c := client.NewDoHClient("https://cloudflare-dns.com/dns-query")
-	// c := client.NewUDPClient("8.8.8.8:53")
+	// c := client.NewDoHClient("https://cloudflare-dns.com/dns-query")
+	c := client.NewUDPClient("8.8.8.8:53")
 	query := packet.NewPacket()
-	query.AddQuestionA("example.com")
+	query.AddQuestionA("google.com")
 	// query.AddQuestionAAAA("lsong.org")
 	// query.AddQuestionCNAME("lsong.org")
 	// query.AddQuestionTXT("lsong.org")
 	res, err := c.Query(query)
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 	for _, question := range res.Questions {
 		log.Println(question.Name, question.Type, question.Class)

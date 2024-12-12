@@ -22,12 +22,18 @@ func NewDoHClient(server string) *DoHClient {
 	}
 }
 
-func (client *DoHClient) Query(req *packet.DNSPacket) (res *packet.DNSPacket, err error) {
-	dnsReq := req.Bytes()
-	b64Req := base64.RawURLEncoding.EncodeToString(dnsReq)
+func (client *DoHClient) Query(query *packet.DNSPacket) (res *packet.DNSPacket, err error) {
+	b64Req := base64.RawURLEncoding.EncodeToString(query.Bytes())
 	url := fmt.Sprintf("%s?dns=%s", client.Server, b64Req)
 	httpClient := &http.Client{Timeout: client.Timeout}
-	resp, err := httpClient.Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/dns-message")
+	req.Header.Set("Accept", "application/dns-message")
+	req.Header.Set("User-Agent", "dns-go")
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

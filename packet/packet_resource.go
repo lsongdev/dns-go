@@ -203,17 +203,16 @@ func ParseResource(reader *bytes.Reader) (record DNSResource, err error) {
 func (r *DNSResourceRecord) WrapData(rdData []byte) []byte {
 	var buf bytes.Buffer
 	// Encode domain name
-	encodeDomainName(&buf, r.Name, false)
+	encodeDomainName(&buf, r.Name, true)
 	// Encode type
-	binary.Write(&buf, binary.BigEndian, r.Type)
+	binary.Write(&buf, binary.BigEndian, uint16(r.Type))
 	// Encode class
-	binary.Write(&buf, binary.BigEndian, r.Class)
+	binary.Write(&buf, binary.BigEndian, uint16(r.Class))
 	// Encode TTL
 	binary.Write(&buf, binary.BigEndian, r.TTL)
 	// RDLENGTH (2 bytes)
 	rdLength := uint16(len(rdData))
 	binary.Write(&buf, binary.BigEndian, rdLength)
-
 	// Write Data
 	buf.Write(rdData)
 	return buf.Bytes()
