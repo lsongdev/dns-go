@@ -4,7 +4,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/song940/dns-go/examples"
+	"github.com/lsongdev/dns-go/examples"
 )
 
 func main() {

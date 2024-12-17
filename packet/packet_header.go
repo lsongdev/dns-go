@@ -39,7 +39,7 @@ type DNSHeader struct {
 	RCode   uint8  // 0: no error, 1: format error, 2: server failure, 3: name error, 4: not implemented, 5: refused, 6-15: reserved
 	QDCount uint16 // Number of questions to expect
 	ANCount uint16 // Number of answers to expect
-	NSCount uint16 // Number of authorities to expect
+	NSCount uint16 // Number of authority records to expect
 	ARCount uint16 // Number of additional records to expect
 }
 

@@ -1,3 +1,3 @@
-module github.com/song940/dns-go
+module github.com/lsongdev/dns-go
 
 go 1.19

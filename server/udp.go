@@ -1,30 +1,30 @@
 package server
 
 import (
+	"io"
 	"log"
 	"net"
 
-	"github.com/song940/dns-go/packet"
+	"github.com/lsongdev/dns-go/packet"
 )
 
 type PackConn struct {
-	net.PacketConn
-	RemoteAddr net.Addr
+	io.Writer
+	RemoteAddr string
 	Request    *packet.DNSPacket
 }
 
 func (p *PackConn) WriteResponse(res *packet.DNSPacket) error {
 	res.Header.QR = packet.DNSResponse
-	data := res.Bytes()
-	_, err := p.WriteTo(data, p.RemoteAddr)
+	_, err := p.Write(res.Bytes())
 	return err
 }
 
-type Handler interface {
+type DNSHandler interface {
 	HandleQuery(conn *PackConn)
 }
 
-func ListenAndServe(addr string, handler Handler) error {
+func ListenUDP(addr string, handler DNSHandler) error {
 	conn, err := net.ListenPacket("udp", addr)
 	if err != nil {
 		return err
@@ -33,7 +33,16 @@ func ListenAndServe(addr string, handler Handler) error {
 	return serveUDP(conn, handler)
 }
 
-func serveUDP(conn net.PacketConn, h Handler) error {
+type UdpWritter struct {
+	net.PacketConn
+	addr net.Addr
+}
+
+func (w *UdpWritter) Write(data []byte) (int, error) {
+	return w.WriteTo(data, w.addr)
+}
+
+func serveUDP(conn net.PacketConn, h DNSHandler) error {
 	buf := make([]byte, 512)
 	for {
 		n, remote, err := conn.ReadFrom(buf)
@@ -41,15 +50,19 @@ func serveUDP(conn net.PacketConn, h Handler) error {
 			log.Printf("Error reading packet: %v", err)
 			continue
 		}
+
 		req, err := packet.FromBytes(buf[:n])
-		pc := &PackConn{
-			PacketConn: conn,
-			RemoteAddr: remote,
-			Request:    req,
-		}
 		if err != nil {
 			log.Printf("Error decoding packet: %v", err)
 			continue
+		}
+		pc := &PackConn{
+			Writer: &UdpWritter{
+				conn,
+				remote,
+			},
+			RemoteAddr: remote.String(),
+			Request:    req,
 		}
 		h.HandleQuery(pc)
 	}

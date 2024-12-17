@@ -3,7 +3,6 @@ package packet
 import (
 	"bytes"
 	"fmt"
-	"net"
 )
 
 // DNS contains data from a single Domain Name Service packet.
@@ -20,9 +19,6 @@ import (
 // |      Additional     | RRs holding additional information
 // +---------------------+
 type DNSPacket struct {
-	net.PacketConn
-	RemoteAddr net.Addr
-
 	Header      *DNSHeader
 	Questions   []*DNSQuestion
 	Answers     []DNSResource
@@ -85,7 +81,6 @@ func FromBytes(data []byte) (d *DNSPacket, err error) {
 		}
 		d.Additionals = append(d.Additionals, additional)
 	}
-
 	return d, err
 }
 
@@ -121,14 +116,17 @@ func (p *DNSPacket) AddQuestion(question *DNSQuestion) {
 
 func (p *DNSPacket) AddAnswer(answer DNSResource) {
 	p.Answers = append(p.Answers, answer)
+	p.Header.ANCount = uint16(len(p.Answers))
 }
 
 func (p *DNSPacket) AddAuthority(authority DNSResource) {
 	p.Authorities = append(p.Authorities, authority)
+	p.Header.NSCount = uint16(len(p.Authorities))
 }
 
 func (p *DNSPacket) AddAdditional(additional DNSResource) {
 	p.Additionals = append(p.Additionals, additional)
+	p.Header.ARCount = uint16(len(p.Additionals))
 }
 
 func (p *DNSPacket) AddQuestionA(domain string) {

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/song940/dns-go/packet"
+	"github.com/lsongdev/dns-go/packet"
 )
 
 type DoHClient struct {

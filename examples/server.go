@@ -3,8 +3,8 @@ package examples
 import (
 	"log"
 
-	"github.com/song940/dns-go/packet"
-	"github.com/song940/dns-go/server"
+	"github.com/lsongdev/dns-go/packet"
+	"github.com/lsongdev/dns-go/server"
 )
 
 type MyHandler struct{}
@@ -26,5 +26,6 @@ func (h *MyHandler) HandleQuery(conn *server.PackConn) {
 
 func RunServer() {
 	h := &MyHandler{}
-	server.ListenAndServe("0.0.0.0:53", h)
+	server.ListenUDP("0.0.0.0:53", h)
+	server.ListenHTTP("0.0.0.0:8080", h)
 }

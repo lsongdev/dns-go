@@ -3,8 +3,8 @@ package examples
 import (
 	"log"
 
-	"github.com/song940/dns-go/client"
-	"github.com/song940/dns-go/packet"
+	"github.com/lsongdev/dns-go/client"
+	"github.com/lsongdev/dns-go/packet"
 )
 
 func printRecord(record packet.DNSResource) {
@@ -21,6 +21,11 @@ func printRecord(record packet.DNSResource) {
 	case packet.DNSTypeTXT:
 		txt := record.(*packet.DNSResourceRecordTXT)
 		println(txt.Name, txt.Content)
+	case packet.DNSTypeNS:
+		txt := record.(*packet.DNSResourceRecordNS)
+		println(txt.Name, txt.NameServer)
+	default:
+		println(record.GetType(), record)
 	}
 }
 
@@ -28,10 +33,10 @@ func RunClient() {
 	// c := client.NewDoHClient("https://cloudflare-dns.com/dns-query")
 	c := client.NewUDPClient("8.8.8.8:53")
 	query := packet.NewPacket()
-	query.AddQuestionA("google.com")
+	// query.AddQuestionTXT("lsong.org")
+	query.AddQuestionTXT("google.com")
 	// query.AddQuestionAAAA("lsong.org")
 	// query.AddQuestionCNAME("lsong.org")
-	// query.AddQuestionTXT("lsong.org")
 	res, err := c.Query(query)
 	if err != nil {
 		log.Fatal(err)
