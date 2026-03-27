@@ -19,7 +19,7 @@ func (d *DNSResourceRecordNS) Decode(reader *bytes.Reader, length uint16) {
 // Subtle: this method shadows the method (DNSResourceRecord).Encode of DNSResourceRecordNS.DNSResourceRecord.
 func (d *DNSResourceRecordNS) Encode() []byte {
 	var buf bytes.Buffer
-	encodeDomainName(&buf, d.NameServer, false)
+	encodeDomainName(&buf, d.NameServer, true)
 	return buf.Bytes()
 }
 

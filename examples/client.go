@@ -24,6 +24,12 @@ func printRecord(record packet.DNSResource) {
 	case packet.DNSTypeNS:
 		txt := record.(*packet.DNSResourceRecordNS)
 		println(txt.Name, txt.NameServer)
+	case packet.DNSTypeMX:
+		mx := record.(*packet.DNSResourceRecordMX)
+		println(mx.Name, mx.Preference, mx.Exchange)
+	case packet.DNSTypePTR:
+		ptr := record.(*packet.DNSResourceRecordPTR)
+		println(ptr.Name, ptr.PtrDomainName)
 	default:
 		println(record.GetType(), record)
 	}

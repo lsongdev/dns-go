@@ -52,8 +52,8 @@ func (d *DNSResourceRecordSOA) Decode(reader *bytes.Reader, length uint16) {
 
 func (d *DNSResourceRecordSOA) Encode() []byte {
 	var buf bytes.Buffer
-	encodeDomainName(&buf, d.MName, false)
-	encodeDomainName(&buf, d.RName, false)
+	encodeDomainName(&buf, d.MName, true)
+	encodeDomainName(&buf, d.RName, true)
 	// Serial
 	binary.Write(&buf, binary.BigEndian, d.Serial)
 	// Refresh

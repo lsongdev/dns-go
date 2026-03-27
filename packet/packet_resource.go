@@ -182,6 +182,14 @@ func ParseResource(reader *bytes.Reader) (record DNSResource, err error) {
 		record = &DNSResourceRecordEDNS{
 			DNSResourceRecord: r,
 		}
+	case DNSTypeMX:
+		record = &DNSResourceRecordMX{
+			DNSResourceRecord: r,
+		}
+	case DNSTypePTR:
+		record = &DNSResourceRecordPTR{
+			DNSResourceRecord: r,
+		}
 	default:
 		err = fmt.Errorf("unknown resource record type: %d", r.Type)
 		return
