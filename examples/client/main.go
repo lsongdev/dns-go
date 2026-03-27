@@ -8,30 +8,29 @@ import (
 )
 
 func printRecord(record packet.DNSResource) {
-	switch record.GetType() {
-	case packet.DNSTypeA:
-		a := record.(*packet.DNSResourceRecordA)
-		println(a.Type, a.Name, a.Address)
-	case packet.DNSTypeAAAA:
-		aaaa := record.(*packet.DNSResourceRecordAAAA)
-		println(aaaa.Name, aaaa.Address)
-	case packet.DNSTypeSOA:
-		soa := record.(*packet.DNSResourceRecordSOA)
-		println(soa.Name, soa.MName, soa.RName, soa.Serial)
-	case packet.DNSTypeTXT:
-		txt := record.(*packet.DNSResourceRecordTXT)
-		println(txt.Name, txt.Content)
-	case packet.DNSTypeNS:
-		txt := record.(*packet.DNSResourceRecordNS)
-		println(txt.Name, txt.NameServer)
-	case packet.DNSTypeMX:
-		mx := record.(*packet.DNSResourceRecordMX)
-		println(mx.Name, mx.Preference, mx.Exchange)
-	case packet.DNSTypePTR:
-		ptr := record.(*packet.DNSResourceRecordPTR)
-		println(ptr.Name, ptr.PtrDomainName)
+	switch r := record.(type) {
+	case *packet.DNSResourceRecordA:
+		println(r.Type, r.Name, r.Address)
+	case *packet.DNSResourceRecordAAAA:
+		println(r.Name, r.Address)
+	case *packet.DNSResourceRecordSOA:
+		println(r.Name, r.MName, r.RName, r.Serial)
+	case *packet.DNSResourceRecordTXT:
+		println(r.Name, r.Content)
+	case *packet.DNSResourceRecordNS:
+		println(r.Name, r.NameServer)
+	case *packet.DNSResourceRecordMX:
+		println(r.Name, r.Preference, r.Exchange)
+	case *packet.DNSResourceRecordPTR:
+		println(r.Name, r.PtrDomainName)
+	case *packet.DNSResourceRecordCNAME:
+		println(r.Name, r.Domain)
+	case *packet.DNSResourceRecordSRV:
+		println(r.Name, r.Priority, r.Weight, r.Port, r.Target)
+	case *packet.DNSResourceRecordEDNS:
+		println(r.Name, r.UDPSize, r.GetDNSSECOK())
 	default:
-		println(record.GetType(), record)
+		println(record.GetType(), r)
 	}
 }
 
