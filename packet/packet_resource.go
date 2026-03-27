@@ -3,7 +3,7 @@ package packet
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
+	"io"
 )
 
 // DNSType defines the type of data being requested/returned in a
@@ -191,7 +191,21 @@ func ParseResource(reader *bytes.Reader) (record DNSResource, err error) {
 			DNSResourceRecord: r,
 		}
 	default:
-		err = fmt.Errorf("unknown resource record type: %d", r.Type)
+		// For unknown record types, read and store the RDATA
+		// This allows parsing to continue for other records
+		var rdLength uint16
+		if err = binary.Read(reader, binary.BigEndian, &rdLength); err != nil {
+			return
+		}
+		rdata := make([]byte, rdLength)
+		if _, err = io.ReadFull(reader, rdata); err != nil {
+			return
+		}
+		// Return the record with raw RDATA
+		record = &DNSResourceRecordUnknown{
+			DNSResourceRecord: r,
+			RData:             rdata,
+		}
 		return
 	}
 	// Read RDLENGTH

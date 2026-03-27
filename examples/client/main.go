@@ -35,8 +35,14 @@ func printRecord(record packet.DNSResource) {
 }
 
 func main() {
-	// c := client.NewDoHClient("https://cloudflare-dns.com/dns-query")
-	c := client.NewUDPClient("8.8.8.8:53")
+	// Use POST method for better compatibility
+	// Try different DoH providers:
+	// - AliDNS (China): https://dns.alidns.com/dns-query
+	// - Cloudflare: https://cloudflare-dns.com/dns-query
+	// - Google: https://dns.google/dns-query
+	c := client.NewHTTPClientPost("https://dns.alidns.com/dns-query")
+	// c := client.NewHTTPClient("https://dns.alidns.com/dns-query") // GET method
+	// c := client.NewUDPClient("8.8.8.8:53")
 	query := packet.NewPacket()
 	// query.AddQuestionTXT("lsong.org")
 	query.AddQuestionTXT("google.com")

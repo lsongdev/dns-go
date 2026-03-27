@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -14,15 +15,16 @@ import (
 )
 
 var (
-	udpAddr   = flag.String("udp", ":5353", "UDP listen address")
-	httpAddr  = flag.String("http", ":8080", "HTTP/DoH listen address")
-	upstream  = flag.String("upstream", "1.1.1.1:53", "Upstream DNS server (UDP address or DoH URL)")
-	timeout   = flag.Duration("timeout", 5*time.Second, "Query timeout")
-	verbose   = flag.Bool("v", false, "Verbose logging")
+	udpAddr  = flag.String("udp", ":5353", "UDP listen address")
+	httpAddr = flag.String("http", ":8080", "HTTP/DoH listen address")
+	upstream = flag.String("upstream", "1.1.1.1:53", "Upstream DNS server (UDP address or DoH URL)")
+	timeout  = flag.Duration("timeout", 5*time.Second, "Query timeout")
+	verbose  = flag.Bool("v", false, "Verbose logging")
 )
 
 type upstreamQuery interface {
 	Query(req *packet.DNSPacket) (*packet.DNSPacket, error)
+	Close() error
 }
 
 type RelayHandler struct {
@@ -31,27 +33,48 @@ type RelayHandler struct {
 
 func NewRelayHandler(upstreamAddr string, timeout time.Duration) (*RelayHandler, error) {
 	var q upstreamQuery
-	
-	// Check if upstream is a URL (DoH) or address (UDP)
-	if len(upstreamAddr) > 4 && (upstreamAddr[:4] == "http" || upstreamAddr[:5] == "https") {
-		c := client.NewDoHClient(upstreamAddr)
+
+	// Check if upstream is a URL (DoH), DoT, TCP, or UDP address
+	if strings.HasPrefix(upstreamAddr, "http") {
+		// Use POST for better compatibility with Cloudflare and other DoH providers
+		c := client.NewHTTPClientPost(upstreamAddr)
+		c.Timeout = timeout
+		q = &httpCloser{c}
+		log.Printf("Using DoH upstream (POST): %s", upstreamAddr)
+	} else if strings.HasPrefix(upstreamAddr, "dot://") {
+		server := upstreamAddr[6:] // Remove "dot://" prefix
+		c := client.NewTLSClient(server)
 		c.Timeout = timeout
 		q = c
-		log.Printf("Using DoH upstream: %s", upstreamAddr)
+		log.Printf("Using DoT upstream: %s", upstreamAddr)
+	} else if strings.HasPrefix(upstreamAddr, "tcp://") {
+		server := upstreamAddr[6:] // Remove "tcp://" prefix
+		c := client.NewTCPClient(server)
+		c.Timeout = timeout
+		q = c
+		log.Printf("Using TCP upstream: %s", upstreamAddr)
 	} else {
 		c := client.NewUDPClient(upstreamAddr)
 		c.Timeout = timeout
 		q = c
 		log.Printf("Using UDP upstream: %s", upstreamAddr)
 	}
-	
+
 	return &RelayHandler{upstream: q}, nil
 }
 
+// httpCloser wraps HTTPClient to add Close method (no-op for HTTP)
+type httpCloser struct {
+	*client.HTTPClient
+}
+
+func (h *httpCloser) Close() error {
+	return nil
+}
+
 func (h *RelayHandler) Close() {
-	// Try to close if it's a UDPClient (DoHClient doesn't need closing)
-	if closer, ok := h.upstream.(interface{ Close() error }); ok {
-		closer.Close()
+	if h.upstream != nil {
+		h.upstream.Close()
 	}
 }
 

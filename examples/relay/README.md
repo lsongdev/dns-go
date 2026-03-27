@@ -17,11 +17,23 @@ DNS 转发器/代理，将 DNS 查询转发到上游 DNS 服务器（默认 Clou
 # 基本运行（UDP 转发到 1.1.1.1）
 go run ./examples/relay/
 
+# 使用 DoH 上游（阿里云 - 推荐国内使用）
+go run ./examples/relay/ -upstream https://dns.alidns.com/dns-query
+
 # 使用 DoH 上游（Cloudflare）
 go run ./examples/relay/ -upstream https://cloudflare-dns.com/dns-query
 
 # 使用 DoH 上游（Google）
 go run ./examples/relay/ -upstream https://dns.google/dns-query
+
+# 使用 DoT 上游（阿里云，端口 853）
+go run ./examples/relay/ -upstream dot://dns.alidns.com:853
+
+# 使用 DoT 上游（Cloudflare，端口 853）
+go run ./examples/relay/ -upstream dot://1.1.1.1:853
+
+# 使用 DoT 上游（Google，端口 853）
+go run ./examples/relay/ -upstream dot://8.8.8.8:853
 
 # 使用 UDP 上游（Google）
 go run ./examples/relay/ -upstream 8.8.8.8:53
