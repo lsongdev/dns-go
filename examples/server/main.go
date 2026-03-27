@@ -1,4 +1,4 @@
-package examples
+package main
 
 import (
 	"log"
@@ -19,12 +19,12 @@ func (h *MyHandler) HandleQuery(conn *server.PackConn) {
 			Name:  conn.Request.Questions[0].Name,
 			TTL:   100,
 		},
-		Address: "127.0.0.1",
+		Address: "1.1.1.1",
 	})
 	conn.WriteResponse(res)
 }
 
-func RunServer() {
+func main() {
 	h := &MyHandler{}
 	server.ListenUDP("0.0.0.0:53", h)
 	server.ListenHTTP("0.0.0.0:8080", h)

@@ -53,6 +53,14 @@ func (q *DNSQuestion) Bytes() []byte {
 }
 
 func encodeDomainName(buf *bytes.Buffer, domain string, addNullTerminator bool) {
+	// Handle root domain specially
+	if domain == "." || domain == "" {
+		if addNullTerminator {
+			buf.WriteByte(0x00)
+		}
+		return
+	}
+	
 	labels := strings.Split(domain, ".")
 	for _, label := range labels {
 		// Write label length
@@ -91,6 +99,11 @@ func decodeDomainName(reader *bytes.Reader) (name string, err error) {
 		}
 		parts = append(parts, string(labelBytes))
 	}
+	
+	if len(parts) == 0 {
+		return ".", nil // Root domain (used in EDNS OPT records)
+	}
+	
 	name = strings.Join(parts, ".")
 	return
 }

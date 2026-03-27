@@ -2,6 +2,7 @@ package packet
 
 import (
 	"bytes"
+	"net"
 	"reflect"
 	"testing"
 )
@@ -195,5 +196,118 @@ func TestEncodeDecodeNSRecord(t *testing.T) {
 	
 	if decodedNS.NameServer != ns.NameServer {
 		t.Errorf("NameServer mismatch: expected %s, got %s", ns.NameServer, decodedNS.NameServer)
+	}
+}
+
+func TestEDNSRecord(t *testing.T) {
+	edns := NewEDNSRecord(4096)
+	edns.SetDNSSECOK(true)
+
+	if !edns.GetDNSSECOK() {
+		t.Error("Expected DNSSEC OK flag to be set")
+	}
+
+	// Test encoding/decoding
+	pkt := NewPacket()
+	pkt.AddAdditional(edns)
+
+	encoded := pkt.Bytes()
+	decoded, err := FromBytes(encoded)
+	if err != nil {
+		t.Fatalf("Failed to decode: %v", err)
+	}
+
+	if len(decoded.Additionals) != 1 {
+		t.Fatalf("Expected 1 additional record, got %d", len(decoded.Additionals))
+	}
+
+	decodedEDNS, ok := decoded.Additionals[0].(*DNSResourceRecordEDNS)
+	if !ok {
+		t.Fatalf("Expected EDNS record, got %T", decoded.Additionals[0])
+	}
+
+	if decodedEDNS.UDPSize != 4096 {
+		t.Errorf("UDPSize mismatch: expected 4096, got %d", decodedEDNS.UDPSize)
+	}
+
+	if !decodedEDNS.GetDNSSECOK() {
+		t.Error("Expected DNSSEC OK flag to be set after decode")
+	}
+}
+
+func TestEDNSOptionClientSubnet(t *testing.T) {
+	edns := NewEDNSRecord(4096)
+	clientIP := net.ParseIP("192.168.1.100")
+	edns.AddEDNSOptionClientSubnet(clientIP, 24)
+
+	// Verify option was added
+	if len(edns.Options) != 1 {
+		t.Fatalf("Expected 1 option, got %d", len(edns.Options))
+	}
+
+	if edns.Options[0].Code != EDNSOptionClientSubnet {
+		t.Errorf("Expected option code %d, got %d", EDNSOptionClientSubnet, edns.Options[0].Code)
+	}
+
+	// Test encoding/decoding
+	pkt := NewPacket()
+	pkt.AddAdditional(edns)
+
+	encoded := pkt.Bytes()
+	decoded, err := FromBytes(encoded)
+	if err != nil {
+		t.Fatalf("Failed to decode: %v", err)
+	}
+
+	if len(decoded.Additionals) != 1 {
+		t.Fatalf("Expected 1 additional record, got %d", len(decoded.Additionals))
+	}
+
+	decodedEDNS, ok := decoded.Additionals[0].(*DNSResourceRecordEDNS)
+	if !ok {
+		t.Fatalf("Expected EDNS record, got %T", decoded.Additionals[0])
+	}
+
+	if len(decodedEDNS.Options) != 1 {
+		t.Fatalf("Expected 1 option, got %d", len(decodedEDNS.Options))
+	}
+}
+
+func TestEDNSOptionPadding(t *testing.T) {
+	edns := NewEDNSRecord(4096)
+	edns.AddEDNSOptionPadding(128)
+
+	if len(edns.Options) != 1 {
+		t.Fatalf("Expected 1 option, got %d", len(edns.Options))
+	}
+
+	if edns.Options[0].Code != EDNSOptionPadding {
+		t.Errorf("Expected option code %d, got %d", EDNSOptionPadding, edns.Options[0].Code)
+	}
+
+	if len(edns.Options[0].Data) != 128 {
+		t.Errorf("Expected padding size 128, got %d", len(edns.Options[0].Data))
+	}
+}
+
+func TestAddAdditionalEDNS(t *testing.T) {
+	pkt := NewPacket()
+	pkt.AddAdditionalEDNS(4096, 0, 0, true)
+
+	if len(pkt.Additionals) != 1 {
+		t.Fatalf("Expected 1 additional record, got %d", len(pkt.Additionals))
+	}
+
+	edns, ok := pkt.Additionals[0].(*DNSResourceRecordEDNS)
+	if !ok {
+		t.Fatalf("Expected EDNS record, got %T", pkt.Additionals[0])
+	}
+
+	if edns.UDPSize != 4096 {
+		t.Errorf("UDPSize mismatch: expected 4096, got %d", edns.UDPSize)
+	}
+
+	if !edns.GetDNSSECOK() {
+		t.Error("Expected DNSSEC OK flag to be set")
 	}
 }

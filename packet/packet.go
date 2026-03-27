@@ -193,6 +193,35 @@ func (p *DNSPacket) AddQuestionPTR(domain string) {
 	})
 }
 
+// AddAdditionalEDNS adds an EDNS0 OPT record to the additional section.
+// udpSize is the maximum UDP payload size (typically 4096).
+// extRCode is the extended response code.
+// version is the EDNS version (should be 0).
+// do is the DNSSEC OK flag.
+func (p *DNSPacket) AddAdditionalEDNS(udpSize uint16, extRCode uint8, version uint8, do bool) {
+	flags := uint16(0)
+	if do {
+		flags = 0x8000 // DNSSEC OK flag
+	}
+
+	// EDNS TTL encodes: ExtRCode (high 8 bits), Version (next 8 bits), Flags (low 16 bits)
+	ttl := (uint32(extRCode) << 24) | (uint32(version) << 16) | uint32(flags)
+
+	p.AddAdditional(&DNSResourceRecordEDNS{
+		DNSResourceRecord: DNSResourceRecord{
+			Name:  ".",
+			Type:  DNSTypeEDNS,
+			Class: DNSClass(udpSize),
+			TTL:   ttl,
+		},
+		UDPSize:  udpSize,
+		ExtRCode: extRCode,
+		Version:  version,
+		Flags:    flags,
+		Options:  nil,
+	})
+}
+
 func (p *DNSPacket) AddQuestionSRV(domain string) {
 	p.AddQuestion(&DNSQuestion{
 		Name:  domain,

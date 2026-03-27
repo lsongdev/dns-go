@@ -1,4 +1,4 @@
-package examples
+package main
 
 import (
 	"log"
@@ -35,7 +35,7 @@ func printRecord(record packet.DNSResource) {
 	}
 }
 
-func RunClient() {
+func main() {
 	// c := client.NewDoHClient("https://cloudflare-dns.com/dns-query")
 	c := client.NewUDPClient("8.8.8.8:53")
 	query := packet.NewPacket()
