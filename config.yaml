@@ -1,0 +1,61 @@
+
+listens:
+  - type: doh
+    addr: ":8443"
+  - type: udp
+    addr: "5353"
+
+cache:
+  
+
+domains:
+  - domain: example.com
+    records:
+      - "@ 3600 IN A 192.168.1.1"
+      - "@ 3600 IN AAAA fd00::1"
+      - "nas 3600 IN A 192.168.1.100"
+      - "printer 3600 IN A 192.168.1.101"
+      - "router 3600 IN A 192.168.1.1"
+      - "@ 3600 IN MX 10 mail.home.lan."
+      - "@ 3600 IN NS ns1.home.lan."
+  - domain: test.com
+    zone_file: ./zones/test.zone # read parse and fill to records fields.
+
+proxy:
+  upstreams:
+    - addr: "https://doh.pub/dns-query"   # DoH
+      type: doh
+      timeout: 5s
+      method: post                        # get | post
+    - addr: "1.1.1.1:53"                   # UDP
+      type: udp
+      timeout: 3s
+    - addr: "8.8.8.8:53"                   # UDP fallback
+      type: udp
+      timeout: 3s
+
+filters:
+  # 黑名单规则 (AdBlock 语法)
+  blocklists:
+    - name: "AdGuard DNS filter"
+      url: "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt"
+      enabled: true
+      refresh: 24h
+    - name: "EasyList China"
+      url: "https://easylist-downloads.adblockplus.org/easylistchina.txt"
+      enabled: false
+      refresh: 24h
+    - name: "local blocklist"
+      file: "/etc/dns-go/filters/my-blocklist.txt"
+      enabled: true
+  # 白名单规则 (例外)
+  allowlists:
+    - name: "local allowlist"
+      file: "/etc/dns-go/filters/my-allowlist.txt"
+      enabled: true
+  # 自定义过滤规则
+  rules:
+    - "||doubleclick.net^"
+    - "||google-analytics.com^"
+    - "@@||example.com^"
+    - "||ads.example.com^$important"

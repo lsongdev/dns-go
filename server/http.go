@@ -2,7 +2,6 @@ package server
 
 import (
 	"encoding/base64"
-	"log"
 	"net/http"
 
 	"github.com/lsongdev/dns-go/packet"
@@ -10,7 +9,7 @@ import (
 
 func ListenHTTP(addr string, handler DNSHandler) error {
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Println(r.RemoteAddr)
+		// log.Println(r.RemoteAddr)
 		d := r.URL.Query().Get("dns")
 		data, err := base64.RawURLEncoding.DecodeString(d)
 		if err != nil {
@@ -21,6 +20,7 @@ func ListenHTTP(addr string, handler DNSHandler) error {
 			return
 		}
 		conn := &PackConn{
+			Writer:     w,
 			Request:    req,
 			RemoteAddr: r.RemoteAddr,
 		}

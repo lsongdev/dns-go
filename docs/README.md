@@ -3,6 +3,7 @@
 ## 目录
 
 - [架构概述](./architecture.md)
+- [请求处理流程](./request-flow.md)
 - [API 参考](./api-reference.md)
 - [使用指南](./usage-guide.md)
 - [代码分析与改进建议](./code-analysis.md)
