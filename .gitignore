@@ -1,0 +1,10 @@
+# build artifacts
+/dns-go
+/cmd/dns-go/dns-go
+
+# downloaded blocklists — large, fetch via testdata/README.md
+/testdata/blocklists/*.txt
+
+# editor
+.DS_Store
+*.swp

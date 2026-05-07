@@ -43,7 +43,7 @@ func (w *UdpWritter) Write(data []byte) (int, error) {
 }
 
 func serveUDP(conn net.PacketConn, h DNSHandler) error {
-	buf := make([]byte, 512)
+	buf := make([]byte, 4096)
 	for {
 		n, remote, err := conn.ReadFrom(buf)
 		if err != nil {
@@ -51,7 +51,14 @@ func serveUDP(conn net.PacketConn, h DNSHandler) error {
 			continue
 		}
 
-		req, err := packet.FromBytes(buf[:n])
+		// Copy off the shared read buffer before handing to a goroutine —
+		// FromBytes may keep slices into the input (name-compression pointers
+		// chase back through the original byte stream via reader.Seek), and
+		// the next ReadFrom will overwrite buf in place.
+		data := make([]byte, n)
+		copy(data, buf[:n])
+
+		req, err := packet.FromBytes(data)
 		if err != nil {
 			log.Printf("Error decoding packet: %v", err)
 			continue
@@ -64,6 +71,6 @@ func serveUDP(conn net.PacketConn, h DNSHandler) error {
 			RemoteAddr: remote.String(),
 			Request:    req,
 		}
-		h.HandleQuery(pc)
+		go h.HandleQuery(pc)
 	}
 }

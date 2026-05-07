@@ -3,10 +3,14 @@ listens:
   - type: doh
     addr: ":8443"
   - type: udp
-    addr: "5353"
+    addr: ":15353"
 
 cache:
-  
+  enabled: true
+  min_ttl: 60s
+  max_ttl: 24h
+  negative_ttl: 60s
+  max_entries: 10000
 
 domains:
   - domain: example.com
@@ -18,10 +22,12 @@ domains:
       - "router 3600 IN A 192.168.1.1"
       - "@ 3600 IN MX 10 mail.home.lan."
       - "@ 3600 IN NS ns1.home.lan."
-  - domain: test.com
-    zone_file: ./zones/test.zone # read parse and fill to records fields.
+  # 也可以从 BIND 风格的 zone 文件加载,records 与 zone_file 二选一:
+  # - domain: home.lan
+  #   zone_file: ./testdata/zones/example.com.zone
 
 proxy:
+  strategy: failover
   upstreams:
     - addr: "https://doh.pub/dns-query"   # DoH
       type: doh
@@ -46,13 +52,13 @@ filters:
       enabled: false
       refresh: 24h
     - name: "local blocklist"
-      file: "/etc/dns-go/filters/my-blocklist.txt"
+      file: "./testdata/blocklists/adguard-dns.txt"
       enabled: true
   # 白名单规则 (例外)
   allowlists:
     - name: "local allowlist"
-      file: "/etc/dns-go/filters/my-allowlist.txt"
-      enabled: true
+      file: "./testdata/blocklists/allowlist.txt"
+      enabled: false
   # 自定义过滤规则
   rules:
     - "||doubleclick.net^"
