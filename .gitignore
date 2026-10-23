@@ -8,3 +8,6 @@
 # editor
 .DS_Store
 *.swp
+
+# downloaded filter lists (filters.cache_dir)
+data/

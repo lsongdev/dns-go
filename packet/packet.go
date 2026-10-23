@@ -32,10 +32,19 @@ func NewPacket() *DNSPacket {
 	}
 }
 
-func NewPacketFromRequest(request *DNSPacket) *DNSPacket {
+// NewReply returns an empty response to req: same ID, opcode, question, and
+// RD/CD bits, with QR set. The request is not modified.
+func NewReply(req *DNSPacket) *DNSPacket {
+	h := &DNSHeader{QR: DNSResponse}
+	if req.Header != nil {
+		h.ID = req.Header.ID
+		h.OpCode = req.Header.OpCode
+		h.RD = req.Header.RD
+		h.CD = req.Header.CD
+	}
 	return &DNSPacket{
-		Header:    request.Header,
-		Questions: request.Questions,
+		Header:    h,
+		Questions: append([]*DNSQuestion(nil), req.Questions...),
 	}
 }
 
@@ -82,31 +91,6 @@ func FromBytes(data []byte) (d *DNSPacket, err error) {
 		d.Additionals = append(d.Additionals, additional)
 	}
 	return d, err
-}
-
-func (packet *DNSPacket) Bytes() []byte {
-	var buf bytes.Buffer
-
-	packet.Header.QDCount = uint16(len(packet.Questions))
-	packet.Header.ANCount = uint16(len(packet.Answers))
-	packet.Header.NSCount = uint16(len(packet.Authorities))
-	packet.Header.ARCount = uint16(len(packet.Additionals))
-
-	buf.Write(packet.Header.Bytes())
-
-	for _, question := range packet.Questions {
-		buf.Write(question.Bytes())
-	}
-	for _, answer := range packet.Answers {
-		buf.Write(answer.Bytes())
-	}
-	for _, authority := range packet.Authorities {
-		buf.Write(authority.Bytes())
-	}
-	for _, additional := range packet.Additionals {
-		buf.Write(additional.Bytes())
-	}
-	return buf.Bytes()
 }
 
 func (p *DNSPacket) AddQuestion(question *DNSQuestion) {
@@ -194,32 +178,12 @@ func (p *DNSPacket) AddQuestionPTR(domain string) {
 }
 
 // AddAdditionalEDNS adds an EDNS0 OPT record to the additional section.
-// udpSize is the maximum UDP payload size (typically 4096).
-// extRCode is the extended response code.
-// version is the EDNS version (should be 0).
-// do is the DNSSEC OK flag.
 func (p *DNSPacket) AddAdditionalEDNS(udpSize uint16, extRCode uint8, version uint8, do bool) {
-	flags := uint16(0)
-	if do {
-		flags = 0x8000 // DNSSEC OK flag
-	}
-
-	// EDNS TTL encodes: ExtRCode (high 8 bits), Version (next 8 bits), Flags (low 16 bits)
-	ttl := (uint32(extRCode) << 24) | (uint32(version) << 16) | uint32(flags)
-
-	p.AddAdditional(&DNSResourceRecordEDNS{
-		DNSResourceRecord: DNSResourceRecord{
-			Name:  ".",
-			Type:  DNSTypeEDNS,
-			Class: DNSClass(udpSize),
-			TTL:   ttl,
-		},
-		UDPSize:  udpSize,
-		ExtRCode: extRCode,
-		Version:  version,
-		Flags:    flags,
-		Options:  nil,
-	})
+	opt := NewEDNSRecord(udpSize)
+	opt.ExtRCode = extRCode
+	opt.Version = version
+	opt.SetDNSSECOK(do)
+	p.AddAdditional(opt)
 }
 
 func (p *DNSPacket) AddQuestionSRV(domain string) {

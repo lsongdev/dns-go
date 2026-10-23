@@ -1,27 +1,35 @@
+// Package client implements DNS exchanges over UDP, TCP, DoT, and DoH. All
+// clients are safe for concurrent use and never serialize queries.
 package client
 
 import (
+	"context"
 	"fmt"
-	"io"
 	"strings"
+	"time"
 
 	"github.com/lsongdev/dns-go/packet"
 )
 
-const maxDNSMessageSize = 65535
+const defaultTimeout = 5 * time.Second
 
-func writeFull(w io.Writer, data []byte) error {
-	for len(data) > 0 {
-		n, err := w.Write(data)
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return io.ErrShortWrite
-		}
-		data = data[n:]
+// Client sends one query and returns the matching response. A response with
+// a non-zero RCODE is a successful exchange, not an error.
+type Client interface {
+	Query(ctx context.Context, req *packet.DNSPacket) (*packet.DNSPacket, error)
+	Close() error
+}
+
+// deadline returns the earlier of ctx's deadline and now+timeout.
+func deadline(ctx context.Context, timeout time.Duration) time.Time {
+	if timeout <= 0 {
+		timeout = defaultTimeout
 	}
-	return nil
+	d := time.Now().Add(timeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(d) {
+		return ctxDeadline
+	}
+	return d
 }
 
 func validateResponse(req, res *packet.DNSPacket) error {

@@ -42,3 +42,8 @@ func (r *DNSResourceRecordMX) Encode() []byte {
 func (r *DNSResourceRecordMX) Bytes() []byte {
 	return r.WrapData(r.Encode())
 }
+
+func (d *DNSResourceRecordMX) packRData(e *encoder) {
+	e.u16(d.Preference)
+	e.name(d.Exchange, true)
+}

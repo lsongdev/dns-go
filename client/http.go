@@ -64,14 +64,11 @@ func createHTTPClient(timeout time.Duration) *http.Client {
 		},
 	}
 
-	return &http.Client{
-		Transport: transport,
-		Timeout:   timeout,
-	}
+	return &http.Client{Transport: transport}
 }
 
 // Query sends a DNS query and returns the response.
-func (c *HTTPClient) Query(query *packet.DNSPacket) (res *packet.DNSPacket, err error) {
+func (c *HTTPClient) Query(ctx context.Context, query *packet.DNSPacket) (res *packet.DNSPacket, err error) {
 	queryData := query.Bytes()
 	httpClient := c.getHTTPClient()
 
@@ -102,7 +99,7 @@ func (c *HTTPClient) Query(query *packet.DNSPacket) (res *packet.DNSPacket, err 
 	req.Header.Set("Accept", "application/dns-message")
 	req.Header.Set("User-Agent", "dns-go")
 
-	ctx, cancel := context.WithTimeout(context.Background(), c.Timeout)
+	ctx, cancel := context.WithDeadline(ctx, deadline(ctx, c.Timeout))
 	defer cancel()
 	req = req.WithContext(ctx)
 
@@ -120,11 +117,11 @@ func (c *HTTPClient) Query(query *packet.DNSPacket) (res *packet.DNSPacket, err 
 		return nil, fmt.Errorf("DoH server returned content type %q", resp.Header.Get("Content-Type"))
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDNSMessageSize+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, packet.MaxMessageSize+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(body) > maxDNSMessageSize {
+	if len(body) > packet.MaxMessageSize {
 		return nil, fmt.Errorf("DoH response is too large")
 	}
 	res, err = packet.FromBytes(body)

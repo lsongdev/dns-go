@@ -1,69 +1,71 @@
-
-mode: hybrid # production deployments should use authoritative or forwarding
+# Forwarding resolver for personal devices: local overrides, ad filtering,
+# caching, and encrypted upstreams. See config.authoritative.yaml for running
+# as a public name server.
+mode: forwarding
 
 listens:
-  - type: doh
-    addr: ":8443"
   - type: udp
     addr: ":15353"
+  - type: tcp
+    addr: ":15353"
+  # DoH. With cert_file/key_file it serves HTTPS directly (HTTP/2); without,
+  # plain HTTP for a TLS-terminating reverse proxy. Path: /dns-query
+  - type: doh
+    addr: ":8443"
+  # DoT (Android "Private DNS" uses this, port 853).
+  # - type: dot
+  #   addr: ":853"
+  #   cert_file: /etc/letsencrypt/live/dns.example.com/fullchain.pem
+  #   key_file: /etc/letsencrypt/live/dns.example.com/privkey.pem
+
+upstreams: # tried in order; SERVFAIL/REFUSED/errors fail over to the next
+  - type: doh
+    addr: "https://doh.pub/dns-query"
+    timeout: 5s
+  - type: dot
+    addr: "1.1.1.1:853"
+    timeout: 3s
+  - type: udp
+    addr: "8.8.8.8:53"
+    timeout: 3s
 
 cache:
   enabled: true
-  min_ttl: 60s
   max_ttl: 24h
-  negative_ttl: 60s
+  negative_ttl: 5m
   max_entries: 10000
 
 domains:
-  - domain: example.com
+  # static: the zone owns the namespace; unknown names are NXDOMAIN.
+  - domain: home.lan
     records:
       - "@ 3600 IN A 192.168.1.1"
-      - "@ 3600 IN AAAA fd00::1"
       - "nas 3600 IN A 192.168.1.100"
       - "printer 3600 IN A 192.168.1.101"
-      - "router 3600 IN A 192.168.1.1"
-      - "@ 3600 IN MX 10 mail.home.lan."
-      - "@ 3600 IN NS ns1.home.lan."
-  # 也可以从 BIND 风格的 zone 文件加载,records 与 zone_file 二选一:
-  # - domain: home.lan
+      - "router 3600 IN CNAME home.lan."
+  # transparent: override individual public names; everything else under
+  # the domain still resolves upstream. CNAMEs to outside names are chased.
+  - domain: example.com
+    kind: transparent
+    records:
+      - "dev 300 IN A 192.168.1.50"
+  # BIND zone files work too:
+  # - domain: example.org
   #   zone_file: ./testdata/zones/example.com.zone
-
-proxy:
-  strategy: failover
-  upstreams:
-    - addr: "https://doh.pub/dns-query"   # DoH
-      type: doh
-      timeout: 5s
-      method: post                        # get | post
-    - addr: "1.1.1.1:53"                   # UDP
-      type: udp
-      timeout: 3s
-    - addr: "8.8.8.8:53"                   # UDP fallback
-      type: udp
-      timeout: 3s
+  # hosts files are transparent zones at the root:
+  # - hosts_file: /etc/hosts
 
 filters:
-  # 黑名单规则 (AdBlock 语法)
-  blocklists:
-    - name: "AdGuard DNS filter"
+  block_mode: zero_ip # zero_ip | nxdomain | refused
+  cache_dir: ./data/filters
+  lists:
+    - name: adguard-dns
       url: "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt"
-      enabled: true
       refresh: 24h
-    - name: "EasyList China"
+    - name: easylist-china
       url: "https://easylist-downloads.adblockplus.org/easylistchina.txt"
       enabled: false
-      refresh: 24h
-    - name: "local blocklist"
-      file: "./testdata/blocklists/adguard-dns.txt"
-      enabled: true
-  # 白名单规则 (例外)
-  allowlists:
-    - name: "local allowlist"
-      file: "./testdata/blocklists/allowlist.txt"
-      enabled: false
-  # 自定义过滤规则
   rules:
     - "||doubleclick.net^"
     - "||google-analytics.com^"
     - "@@||example.com^"
-    - "||ads.example.com^$important"

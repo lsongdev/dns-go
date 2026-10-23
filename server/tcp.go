@@ -1,145 +1,120 @@
 package server
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/binary"
-	"fmt"
+	"errors"
 	"io"
-	"log"
 	"net"
+	"time"
 
 	"github.com/lsongdev/dns-go/packet"
 )
 
-// ListenTCP starts a DNS server over TCP at the given address.
-func ListenTCP(addr string, handler DNSHandler) error {
+// TCPServer serves DNS over TCP (RFC 7766) or, with a TLS listener, DNS over
+// TLS (RFC 7858). Queries on one connection are answered in order.
+type TCPServer struct {
+	Handler Handler
+	// IdleTimeout closes connections with no complete query in this window.
+	// Zero means 30s.
+	IdleTimeout time.Duration
+	// Transport labels requests; ListenTLS sets it to TransportDoT.
+	Transport Transport
+}
+
+// ListenTCP serves h over plain TCP on addr.
+func ListenTCP(addr string, h Handler) error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
 	defer ln.Close()
-	log.Printf("TCP server listening on %s", addr)
-	return serveTCP(ln, handler)
+	return (&TCPServer{Handler: h}).Serve(ln)
 }
 
-// ListenDoT starts a DNS over TLS (RFC 7858) server at the given address.
-// certFile and keyFile are the TLS certificate and key files.
-// Typical DoT port is 853.
-func ListenTLS(addr string, certFile, keyFile string, handler DNSHandler) error {
-	// Load TLS certificate
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		return err
-	}
-
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
-	}
-
-	return ListenTLSWithConfig(addr, tlsConfig, handler)
-}
-
-// ListenDoTWithTLS starts a DNS over TLS server with custom TLS config.
-// This allows more control over TLS settings (e.g., custom certificates, client auth).
-func ListenTLSWithConfig(addr string, tlsConfig *tls.Config, handler DNSHandler) error {
-	ln, err := net.Listen("tcp", addr)
+// ListenTLS serves h over DNS-over-TLS on addr.
+func ListenTLS(addr string, config *tls.Config, h Handler) error {
+	ln, err := tls.Listen("tcp", addr, config)
 	if err != nil {
 		return err
 	}
 	defer ln.Close()
-
-	tlsLn := tls.NewListener(ln, tlsConfig)
-	defer tlsLn.Close()
-
-	log.Printf("DoT server listening on %s", addr)
-	return serveTCP(tlsLn, handler)
+	return (&TCPServer{Handler: h, Transport: TransportDoT}).Serve(ln)
 }
 
-// serveTCP handles DNS messages over a TCP listener (plain TCP or TLS).
-func serveTCP(ln net.Listener, h DNSHandler) error {
+// Serve accepts connections until ln is closed, then returns nil.
+func (s *TCPServer) Serve(ln net.Listener) error {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			log.Printf("Error accepting connection: %v", err)
-			continue
-		}
-		go handleTCPConn(conn, h)
-	}
-}
-
-func handleTCPConn(conn net.Conn, h DNSHandler) {
-	defer conn.Close()
-
-	for {
-		// Read 2-byte length prefix
-		lengthBuf := make([]byte, 2)
-		_, err := io.ReadFull(conn, lengthBuf)
-		if err != nil {
-			if err != io.EOF && err != io.ErrUnexpectedEOF {
-				log.Printf("Error reading length prefix from %s: %v", conn.RemoteAddr(), err)
+			if errors.Is(err, net.ErrClosed) {
+				return nil
 			}
-			return
-		}
-		msgLen := binary.BigEndian.Uint16(lengthBuf)
-
-		// Read DNS message
-		buf := make([]byte, msgLen)
-		_, err = io.ReadFull(conn, buf)
-		if err != nil {
-			log.Printf("Error reading DNS message from %s: %v", conn.RemoteAddr(), err)
-			return
-		}
-
-		// Parse DNS query
-		req, err := packet.FromBytes(buf)
-		if err != nil {
-			log.Printf("Error decoding packet from %s: %v", conn.RemoteAddr(), err)
-			continue
-		}
-
-		// Create connection wrapper
-		pc := &PackConn{
-			Writer:     &tcpResponseWriter{Writer: conn},
-			RemoteAddr: conn.RemoteAddr().String(),
-			Request:    req,
-		}
-
-		// Handle query
-		h.HandleQuery(pc)
-	}
-}
-
-// tcpResponseWriter adds the two-byte message length required by DNS over
-// TCP and DNS over TLS. PackConn deliberately deals in raw DNS messages so
-// each transport is responsible for its own framing.
-type tcpResponseWriter struct {
-	io.Writer
-}
-
-func (w *tcpResponseWriter) Write(data []byte) (int, error) {
-	if len(data) > int(^uint16(0)) {
-		return 0, fmt.Errorf("DNS message too large for TCP framing: %d bytes", len(data))
-	}
-	frame := make([]byte, 2+len(data))
-	binary.BigEndian.PutUint16(frame[:2], uint16(len(data)))
-	copy(frame[2:], data)
-	if err := writeFull(w.Writer, frame); err != nil {
-		return 0, err
-	}
-	return len(data), nil
-}
-
-func writeFull(w io.Writer, data []byte) error {
-	for len(data) > 0 {
-		n, err := w.Write(data)
-		if err != nil {
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				continue
+			}
 			return err
 		}
-		if n == 0 {
-			return io.ErrShortWrite
-		}
-		data = data[n:]
+		go s.serveConn(conn)
 	}
-	return nil
 }
+
+func (s *TCPServer) serveConn(conn net.Conn) {
+	defer conn.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	idle := s.IdleTimeout
+	if idle <= 0 {
+		idle = 30 * time.Second
+	}
+	transport := s.Transport
+	if transport == "" {
+		transport = TransportTCP
+	}
+	var length [2]byte
+	for {
+		if err := conn.SetReadDeadline(time.Now().Add(idle)); err != nil {
+			return
+		}
+		if _, err := io.ReadFull(conn, length[:]); err != nil {
+			return
+		}
+		buf := make([]byte, binary.BigEndian.Uint16(length[:]))
+		if _, err := io.ReadFull(conn, buf); err != nil {
+			return
+		}
+		req, err := packet.FromBytes(buf)
+		if err != nil {
+			return // stream framing can no longer be trusted
+		}
+		w := &tcpWriter{conn: conn, transport: transport}
+		s.Handler.ServeDNS(ctx, w, req)
+		if w.err != nil {
+			return
+		}
+	}
+}
+
+type tcpWriter struct {
+	conn      net.Conn
+	transport Transport
+	err       error
+}
+
+func (w *tcpWriter) WriteMsg(res *packet.DNSPacket) error {
+	data, _ := res.Pack(packet.MaxMessageSize)
+	frame := make([]byte, 2+len(data))
+	binary.BigEndian.PutUint16(frame, uint16(len(data)))
+	copy(frame[2:], data)
+	if err := w.conn.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		w.err = err
+		return err
+	}
+	_, w.err = w.conn.Write(frame)
+	return w.err
+}
+
+func (w *tcpWriter) RemoteAddr() net.Addr { return w.conn.RemoteAddr() }
+func (w *tcpWriter) Transport() Transport { return w.transport }

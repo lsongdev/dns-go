@@ -75,3 +75,11 @@ func (d *DNSResourceRecordSOA) Encode() []byte {
 func (a *DNSResourceRecordSOA) Bytes() []byte {
 	return a.WrapData(a.Encode())
 }
+
+func (d *DNSResourceRecordSOA) packRData(e *encoder) {
+	e.name(d.MName, true)
+	e.name(d.RName, true)
+	for _, v := range []uint32{d.Serial, d.Refresh, d.Retry, d.Expire, d.Minimum} {
+		e.u32(v)
+	}
+}

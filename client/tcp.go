@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/binary"
 	"fmt"
@@ -12,148 +13,137 @@ import (
 	"github.com/lsongdev/dns-go/packet"
 )
 
-// TCPClient is a DNS client over TCP or TLS.
-// DNS over TCP/TLS uses a 2-byte length prefix for each message.
+const maxIdleConns = 4
+
+// TCPClient is a DNS client over TCP (RFC 7766) or TLS (RFC 7858). It keeps
+// a small pool of idle connections; each in-flight query owns a connection,
+// so concurrent queries never wait on each other.
 type TCPClient struct {
 	Server  string
 	Timeout time.Duration
 
-	mu        sync.Mutex
-	conn      net.Conn
-	useTLS    bool
 	tlsConfig *tls.Config
+
+	mu     sync.Mutex
+	idle   []net.Conn
+	closed bool
 }
 
-// NewTCPClient creates a new DNS over TCP client.
 func NewTCPClient(server string) *TCPClient {
-	return &TCPClient{
-		Server:  server,
-		Timeout: 5 * time.Second,
-		useTLS:  false,
-	}
+	return &TCPClient{Server: server, Timeout: defaultTimeout}
 }
 
-// NewDoTClient creates a new DNS over TLS client (RFC 7858).
-// server should be in format "host:port" (typically port 853)
-// serverName is used for TLS SNI and certificate verification
+// NewTLSClient creates a DNS-over-TLS client; the SNI and certificate name
+// come from the host part of server ("host:853").
 func NewTLSClient(server string) *TCPClient {
 	serverName, _, _ := net.SplitHostPort(server)
-	return NewTLSClientWithConfig(server, &tls.Config{
-		ServerName: serverName,
-		MinVersion: tls.VersionTLS12,
-	})
+	return NewTLSClientWithConfig(server, &tls.Config{ServerName: serverName, MinVersion: tls.VersionTLS12})
 }
 
-// NewDoTClientWithConfig creates a new DNS over TLS client with custom TLS config.
-func NewTLSClientWithConfig(server string, tlsConfig *tls.Config) *TCPClient {
-	return &TCPClient{
-		Server:    server,
-		Timeout:   5 * time.Second,
-		useTLS:    true,
-		tlsConfig: tlsConfig,
-	}
+func NewTLSClientWithConfig(server string, config *tls.Config) *TCPClient {
+	return &TCPClient{Server: server, Timeout: defaultTimeout, tlsConfig: config}
 }
 
-// Query sends a DNS query and returns the response.
-func (c *TCPClient) Query(req *packet.DNSPacket) (res *packet.DNSPacket, err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (c *TCPClient) Query(ctx context.Context, req *packet.DNSPacket) (*packet.DNSPacket, error) {
+	data := req.Bytes()
+	frame := make([]byte, 2+len(data))
+	binary.BigEndian.PutUint16(frame, uint16(len(data)))
+	copy(frame[2:], data)
 
-	conn, err := c.getConnLocked()
+	// A pooled connection may have been closed by the server while idle; in
+	// that case retry once on a fresh connection.
+	conn, reused, err := c.get(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	if err := conn.SetDeadline(time.Now().Add(c.Timeout)); err != nil {
-		return nil, err
+	res, err := c.exchange(ctx, conn, req, frame)
+	if err != nil && reused && ctx.Err() == nil {
+		conn.Close()
+		if conn, err = c.dial(ctx); err != nil {
+			return nil, err
+		}
+		res, err = c.exchange(ctx, conn, req, frame)
 	}
-
-	// Encode the query with 2-byte length prefix
-	queryData := req.Bytes()
-	if len(queryData) > maxDNSMessageSize {
-		return nil, fmt.Errorf("DNS query is too large: %d bytes", len(queryData))
-	}
-	lengthBuf := make([]byte, 2)
-	binary.BigEndian.PutUint16(lengthBuf, uint16(len(queryData)))
-
-	// Write length prefix + query data
-	if err = writeFull(conn, append(lengthBuf, queryData...)); err != nil {
-		c.closeConnLocked()
-		return nil, err
-	}
-
-	// Read 2-byte length prefix
-	lengthBuf = make([]byte, 2)
-	_, err = io.ReadFull(conn, lengthBuf)
 	if err != nil {
-		c.closeConnLocked()
+		conn.Close()
 		return nil, err
 	}
-	msgLen := binary.BigEndian.Uint16(lengthBuf)
-
-	// Read response data
-	buf := make([]byte, msgLen)
-	_, err = io.ReadFull(conn, buf)
-	if err != nil {
-		c.closeConnLocked()
-		return nil, err
-	}
-
-	res, err = packet.FromBytes(buf)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := validateResponse(req, res); err != nil {
-		c.closeConnLocked()
-		return nil, err
-	}
-
+	c.put(conn)
 	return res, nil
 }
 
-// Close closes the underlying connection.
-func (c *TCPClient) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.closeConnLocked()
-}
-
-func (c *TCPClient) getConnLocked() (net.Conn, error) {
-	if c.conn != nil {
-		return c.conn, nil
+func (c *TCPClient) exchange(ctx context.Context, conn net.Conn, req *packet.DNSPacket, frame []byte) (*packet.DNSPacket, error) {
+	if err := conn.SetDeadline(deadline(ctx, c.Timeout)); err != nil {
+		return nil, err
 	}
-
-	// Plain TCP
-	conn, err := net.DialTimeout("tcp", c.Server, c.Timeout)
+	stop := context.AfterFunc(ctx, func() { conn.SetDeadline(time.Unix(1, 0)) })
+	defer stop()
+	if _, err := conn.Write(frame); err != nil {
+		return nil, err
+	}
+	var length [2]byte
+	if _, err := io.ReadFull(conn, length[:]); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, binary.BigEndian.Uint16(length[:]))
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		return nil, err
+	}
+	res, err := packet.FromBytes(buf)
 	if err != nil {
 		return nil, err
 	}
-
-	if c.useTLS {
-		// upgrade plain tcp to tls
-		tlsConn := tls.Client(conn, c.tlsConfig)
-		if err := tlsConn.SetDeadline(time.Now().Add(c.Timeout)); err != nil {
-			conn.Close()
-			return nil, err
-		}
-		if err := tlsConn.Handshake(); err != nil {
-			conn.Close()
-			return nil, err
-		}
-		c.conn = tlsConn
-		return tlsConn, nil
+	if err := validateResponse(req, res); err != nil {
+		return nil, err
 	}
-
-	c.conn = conn
-	return conn, nil
+	return res, nil
 }
 
-func (c *TCPClient) closeConnLocked() error {
-	if c.conn != nil {
-		err := c.conn.Close()
-		c.conn = nil
-		return err
+func (c *TCPClient) get(ctx context.Context) (net.Conn, bool, error) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil, false, fmt.Errorf("client: closed")
 	}
+	if n := len(c.idle); n > 0 {
+		conn := c.idle[n-1]
+		c.idle = c.idle[:n-1]
+		c.mu.Unlock()
+		return conn, true, nil
+	}
+	c.mu.Unlock()
+	conn, err := c.dial(ctx)
+	return conn, false, err
+}
+
+func (c *TCPClient) dial(ctx context.Context) (net.Conn, error) {
+	ctx, cancel := context.WithDeadline(ctx, deadline(ctx, c.Timeout))
+	defer cancel()
+	if c.tlsConfig != nil {
+		d := tls.Dialer{Config: c.tlsConfig}
+		return d.DialContext(ctx, "tcp", c.Server)
+	}
+	var d net.Dialer
+	return d.DialContext(ctx, "tcp", c.Server)
+}
+
+func (c *TCPClient) put(conn net.Conn) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || len(c.idle) >= maxIdleConns {
+		conn.Close()
+		return
+	}
+	c.idle = append(c.idle, conn)
+}
+
+func (c *TCPClient) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+	for _, conn := range c.idle {
+		conn.Close()
+	}
+	c.idle = nil
 	return nil
 }

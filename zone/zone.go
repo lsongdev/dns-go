@@ -17,10 +17,36 @@ import (
 	"github.com/lsongdev/dns-go/packet"
 )
 
+// Zone is a set of records under one origin. It is the unit stored, listed,
+// and replaced by Store, and what a control plane builds from its database.
 type Zone struct {
 	Origin  string
-	TTL     uint32
+	Kind    Kind
+	TTL     uint32 // default TTL from $TTL; informational once parsed
 	Records []packet.DNSResource
+}
+
+// Kind selects how a zone answers names it holds no data for.
+type Kind string
+
+const (
+	// Static zones own their whole namespace: unknown names get NXDOMAIN,
+	// known names without the type get NODATA. Authoritative zones are static.
+	Static Kind = "static"
+	// Transparent zones answer only names they hold data for; any other name
+	// falls through to the next resolution stage (filter, cache, upstream).
+	// Use them for local overrides of public names and for hosts files.
+	Transparent Kind = "transparent"
+)
+
+// ParseString parses zone-file text whose relative names are under origin.
+func ParseString(origin, text string) (*Zone, error) {
+	z, err := Parse([]byte("$ORIGIN " + absDomain(origin) + ".\n" + text))
+	if err != nil {
+		return nil, err
+	}
+	z.Origin = absDomain(origin)
+	return z, nil
 }
 
 func ParseFile(path string) (*Zone, error) {
@@ -216,21 +242,48 @@ func parseRecordLine(fields []string, z *Zone, defaultTTL uint32, lineno int) (p
 	rdata := fields[idx:]
 
 	dname := resolveDomain(name, z.Origin)
+	rdata = qualifyRDataNames(rtype, rdata, z.Origin)
 	rec, err := buildRecord(dname, rtype, class, ttl, rdata, lineno)
 	return rec, ttl, err
 }
 
+// resolveDomain makes a presentation-format name absolute (RFC 1035 §5.1):
+// "@" is the origin, a trailing dot marks an absolute name, and anything
+// else is relative to the origin. Results carry no trailing dot; the root is ".".
 func resolveDomain(name, origin string) string {
-	if name == "@" {
+	switch {
+	case name == "@" || name == "":
 		return origin
-	}
-	if strings.HasSuffix(name, ".") {
+	case name == ".":
+		return "."
+	case strings.HasSuffix(name, "."):
 		return strings.TrimSuffix(name, ".")
+	case origin == "." || origin == "":
+		return name
+	default:
+		return name + "." + origin
 	}
-	if name == "" || name == "." {
-		return origin
+}
+
+// rdataNameFields lists, per type, which RDATA fields are domain names.
+var rdataNameFields = map[string][]int{
+	"CNAME": {0}, "NS": {0}, "PTR": {0}, "NSEC": {0},
+	"MX": {1}, "SOA": {0, 1}, "SRV": {3}, "SVCB": {1}, "HTTPS": {1}, "RRSIG": {7},
+}
+
+// qualifyRDataNames resolves relative names inside RDATA against origin.
+func qualifyRDataNames(rtype string, rdata []string, origin string) []string {
+	fields := rdataNameFields[strings.ToUpper(rtype)]
+	if len(fields) == 0 {
+		return rdata
 	}
-	return name + "." + origin
+	out := append([]string(nil), rdata...)
+	for _, i := range fields {
+		if i < len(out) {
+			out[i] = resolveDomain(out[i], origin)
+		}
+	}
+	return out
 }
 
 func absDomain(s string) string {

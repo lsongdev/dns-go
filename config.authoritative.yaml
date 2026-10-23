@@ -1,0 +1,13 @@
+# Public authoritative name server. Point a registrar's NS records here.
+# No recursion, cache, or filtering; names outside the zones get REFUSED.
+mode: authoritative
+
+listens:
+  - type: udp
+    addr: ":53"
+  - type: tcp
+    addr: ":53"
+
+domains:
+  - domain: example.com
+    zone_file: ./testdata/zones/example.com.zone

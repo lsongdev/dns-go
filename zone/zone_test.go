@@ -58,7 +58,7 @@ func TestParseCNAME(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected CNAME record, got %T", z.Records[0])
 	}
-	if cname.Domain != "example.com." {
+	if cname.Domain != "example.com" {
 		t.Errorf("expected target example.com., got %q", cname.Domain)
 	}
 }
@@ -73,7 +73,7 @@ func TestParseNS(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected NS record, got %T", z.Records[0])
 	}
-	if ns.NameServer != "ns1.example.com." {
+	if ns.NameServer != "ns1.example.com" {
 		t.Errorf("expected ns1.example.com., got %q", ns.NameServer)
 	}
 }
@@ -91,7 +91,7 @@ func TestParseMX(t *testing.T) {
 	if mx.Preference != 10 {
 		t.Errorf("expected preference 10, got %d", mx.Preference)
 	}
-	if mx.Exchange != "mail.example.com." {
+	if mx.Exchange != "mail.example.com" {
 		t.Errorf("expected mail.example.com., got %q", mx.Exchange)
 	}
 }
@@ -131,10 +131,10 @@ func TestParseSOA(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected SOA record, got %T", z.Records[0])
 	}
-	if soa.MName != "ns1.example.com." {
+	if soa.MName != "ns1.example.com" {
 		t.Errorf("expected MName ns1.example.com., got %q", soa.MName)
 	}
-	if soa.RName != "admin.example.com." {
+	if soa.RName != "admin.example.com" {
 		t.Errorf("expected RName admin.example.com., got %q", soa.RName)
 	}
 	if soa.Serial != 2024010101 {
@@ -173,7 +173,7 @@ func TestParseSRV(t *testing.T) {
 	if srv.Port != 5060 {
 		t.Errorf("expected port 5060, got %d", srv.Port)
 	}
-	if srv.Target != "sipserver.example.com." {
+	if srv.Target != "sipserver.example.com" {
 		t.Errorf("expected sipserver.example.com., got %q", srv.Target)
 	}
 }
@@ -188,7 +188,7 @@ func TestParsePTR(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected PTR record, got %T", z.Records[0])
 	}
-	if ptr.PtrDomainName != "example.com." {
+	if ptr.PtrDomainName != "example.com" {
 		t.Errorf("expected example.com., got %q", ptr.PtrDomainName)
 	}
 }
@@ -432,6 +432,34 @@ func TestParseRejectsInvalidSVCBParameters(t *testing.T) {
 	for _, input := range inputs {
 		if _, err := Parse([]byte(input)); err == nil {
 			t.Errorf("expected invalid SVCB record to fail: %s", input)
+		}
+	}
+}
+
+func TestParseQualifiesRelativeRDataNames(t *testing.T) {
+	z, err := ParseString("example.com", `
+www   IN CNAME @
+alias IN CNAME mail.sub
+@     IN MX    10 mail
+@     IN MX    0 .
+@     IN NS    ns1.example.net.
+_s._tcp IN SRV 1 1 80 web
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := []string{
+		z.Records[0].(*packet.DNSResourceRecordCNAME).Domain,
+		z.Records[1].(*packet.DNSResourceRecordCNAME).Domain,
+		z.Records[2].(*packet.DNSResourceRecordMX).Exchange,
+		z.Records[3].(*packet.DNSResourceRecordMX).Exchange,
+		z.Records[4].(*packet.DNSResourceRecordNS).NameServer,
+		z.Records[5].(*packet.DNSResourceRecordSRV).Target,
+	}
+	want := []string{"example.com", "mail.sub.example.com", "mail.example.com", ".", "ns1.example.net", "web.example.com"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("record %d: got %q, want %q", i, got[i], want[i])
 		}
 	}
 }

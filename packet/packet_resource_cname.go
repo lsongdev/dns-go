@@ -27,3 +27,7 @@ func (d *DNSResourceRecordCNAME) Encode() []byte {
 func (a *DNSResourceRecordCNAME) Bytes() []byte {
 	return a.WrapData(a.Encode())
 }
+
+func (d *DNSResourceRecordCNAME) packRData(e *encoder) {
+	e.name(d.Domain, true)
+}

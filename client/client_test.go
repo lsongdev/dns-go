@@ -1,201 +1,174 @@
 package client
 
 import (
-	"encoding/binary"
-	"io"
+	"context"
+	"fmt"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/lsongdev/dns-go/packet"
+	"github.com/lsongdev/dns-go/server"
 )
 
-func clientTestQuery() *packet.DNSPacket {
+func testQuery(name string) *packet.DNSPacket {
 	req := packet.NewPacket()
-	req.AddQuestionA("example.com")
+	req.AddQuestionTXT(name)
 	return req
 }
 
-func nxdomainResponse(req *packet.DNSPacket) *packet.DNSPacket {
-	res := packet.NewPacketFromRequest(req)
-	res.Header.QR = packet.DNSResponse
-	res.Header.RCode = 3
-	return res
+// testHandler answers "big." with 40 TXT records (too large for UDP),
+// "slow." after a delay, and everything else with NXDOMAIN.
+func testHandler(ctx context.Context, w server.ResponseWriter, req *packet.DNSPacket) {
+	res := packet.NewReply(req)
+	switch req.Questions[0].Name {
+	case "big.example":
+		for i := 0; i < 40; i++ {
+			res.AddAnswer(&packet.DNSResourceRecordTXT{
+				DNSResourceRecord: packet.DNSResourceRecord{Name: "big.example", Type: packet.DNSTypeTXT, Class: packet.DNSClassIN, TTL: 60},
+				Content:           fmt.Sprintf("record-%02d-padding-padding-padding", i),
+			})
+		}
+	case "slow.example":
+		time.Sleep(500 * time.Millisecond)
+	default:
+		res.SetRCode(packet.RCodeNameError)
+	}
+	_ = w.WriteMsg(res)
 }
 
-func TestUDPClientReturnsNXDOMAINAsResponse(t *testing.T) {
+type countingListener struct {
+	net.Listener
+	accepted atomic.Int32
+}
+
+func (l *countingListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err == nil {
+		l.accepted.Add(1)
+	}
+	return c, err
+}
+
+// startServers serves testHandler on UDP and TCP at the same address.
+func startServers(t *testing.T) (string, *countingListener) {
+	t.Helper()
+	tcp, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp, err := net.ListenPacket("udp", tcp.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln := &countingListener{Listener: tcp}
+	h := server.HandlerFunc(testHandler)
+	go (&server.UDPServer{Handler: h}).Serve(udp)
+	go (&server.TCPServer{Handler: h}).Serve(ln)
+	t.Cleanup(func() { udp.Close(); tcp.Close() })
+	return tcp.Addr().String(), ln
+}
+
+func TestNXDOMAINIsAResponseNotAnError(t *testing.T) {
+	addr, _ := startServers(t)
+	for _, c := range []Client{NewUDPClient(addr), NewTCPClient(addr)} {
+		res, err := c.Query(context.Background(), testQuery("missing.example"))
+		if err != nil || res.RCode() != packet.RCodeNameError {
+			t.Fatalf("%T: res=%v err=%v", c, res, err)
+		}
+		c.Close()
+	}
+}
+
+func TestUDPFallsBackToTCPWhenTruncated(t *testing.T) {
+	addr, ln := startServers(t)
+	c := NewUDPClient(addr)
+	defer c.Close()
+	res, err := c.Query(context.Background(), testQuery("big.example"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Header.TC != 0 || len(res.Answers) != 40 || ln.accepted.Load() != 1 {
+		t.Fatalf("want full answer over TCP; TC=%d answers=%d tcp conns=%d", res.Header.TC, len(res.Answers), ln.accepted.Load())
+	}
+}
+
+func TestConcurrentQueriesDoNotSerialize(t *testing.T) {
+	addr, _ := startServers(t)
+	for _, c := range []Client{NewUDPClient(addr), NewTCPClient(addr)} {
+		slow := make(chan error, 1)
+		go func() {
+			_, err := c.Query(context.Background(), testQuery("slow.example"))
+			slow <- err
+		}()
+		time.Sleep(50 * time.Millisecond)
+		start := time.Now()
+		if _, err := c.Query(context.Background(), testQuery("fast.example")); err != nil {
+			t.Fatal(err)
+		}
+		if d := time.Since(start); d > 200*time.Millisecond {
+			t.Fatalf("%T: fast query waited %v behind a slow one", c, d)
+		}
+		if err := <-slow; err != nil {
+			t.Fatal(err)
+		}
+		c.Close()
+	}
+}
+
+func TestTCPReusesConnections(t *testing.T) {
+	addr, ln := startServers(t)
+	c := NewTCPClient(addr)
+	defer c.Close()
+	for i := 0; i < 5; i++ {
+		if _, err := c.Query(context.Background(), testQuery("missing.example")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := ln.accepted.Load(); n != 1 {
+		t.Fatalf("sequential queries opened %d connections, want 1", n)
+	}
+}
+
+func TestUDPIgnoresMismatchedDatagrams(t *testing.T) {
 	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-
-	serverErr := make(chan error, 1)
 	go func() {
-		buf := make([]byte, 65535)
+		buf := make([]byte, 512)
 		n, addr, err := conn.ReadFrom(buf)
 		if err != nil {
-			serverErr <- err
 			return
 		}
-		req, err := packet.FromBytes(buf[:n])
-		if err != nil {
-			serverErr <- err
-			return
-		}
-		_, err = conn.WriteTo(nxdomainResponse(req).Bytes(), addr)
-		serverErr <- err
+		req, _ := packet.FromBytes(buf[:n])
+		spoofed := packet.NewReply(req)
+		spoofed.Header.ID++
+		conn.WriteTo(spoofed.Bytes(), addr)
+		conn.WriteTo([]byte("garbage"), addr)
+		real := packet.NewReply(req)
+		real.SetRCode(packet.RCodeNameError)
+		conn.WriteTo(real.Bytes(), addr)
 	}()
-
 	c := NewUDPClient(conn.LocalAddr().String())
 	c.Timeout = time.Second
-	defer c.Close()
-	res, err := c.Query(clientTestQuery())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Header.RCode != 3 {
-		t.Fatalf("got rcode %d, want 3", res.Header.RCode)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
+	res, err := c.Query(context.Background(), testQuery("x.example"))
+	if err != nil || res.RCode() != packet.RCodeNameError {
+		t.Fatalf("want the genuine reply, got %v %v", res, err)
 	}
 }
 
-func TestTCPClientReturnsNXDOMAINAsResponse(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+func TestQueryHonorsContext(t *testing.T) {
+	addr, _ := startServers(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := NewUDPClient(addr).Query(ctx, testQuery("slow.example")); err == nil {
+		t.Fatal("want deadline error")
 	}
-	defer ln.Close()
-
-	serverErr := make(chan error, 1)
-	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			serverErr <- err
-			return
-		}
-		defer conn.Close()
-		length := make([]byte, 2)
-		if _, err := io.ReadFull(conn, length); err != nil {
-			serverErr <- err
-			return
-		}
-		data := make([]byte, binary.BigEndian.Uint16(length))
-		if _, err := io.ReadFull(conn, data); err != nil {
-			serverErr <- err
-			return
-		}
-		req, err := packet.FromBytes(data)
-		if err != nil {
-			serverErr <- err
-			return
-		}
-		responseData := nxdomainResponse(req).Bytes()
-		frame := make([]byte, 2+len(responseData))
-		binary.BigEndian.PutUint16(frame[:2], uint16(len(responseData)))
-		copy(frame[2:], responseData)
-		serverErr <- writeFull(conn, frame)
-	}()
-
-	c := NewTCPClient(ln.Addr().String())
-	c.Timeout = time.Second
-	defer c.Close()
-	res, err := c.Query(clientTestQuery())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Header.RCode != 3 {
-		t.Fatalf("got rcode %d, want 3", res.Header.RCode)
-	}
-	if err := <-serverErr; err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestUDPClientFallsBackToTCPWhenTruncated(t *testing.T) {
-	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tcpLn.Close()
-	udpConn, err := net.ListenPacket("udp", tcpLn.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer udpConn.Close()
-
-	udpErr := make(chan error, 1)
-	go func() {
-		buf := make([]byte, 65535)
-		n, addr, err := udpConn.ReadFrom(buf)
-		if err != nil {
-			udpErr <- err
-			return
-		}
-		req, err := packet.FromBytes(buf[:n])
-		if err != nil {
-			udpErr <- err
-			return
-		}
-		res := packet.NewPacketFromRequest(req)
-		res.Header.QR = packet.DNSResponse
-		res.Header.TC = 1
-		_, err = udpConn.WriteTo(res.Bytes(), addr)
-		udpErr <- err
-	}()
-
-	tcpErr := make(chan error, 1)
-	go func() {
-		conn, err := tcpLn.Accept()
-		if err != nil {
-			tcpErr <- err
-			return
-		}
-		defer conn.Close()
-		length := make([]byte, 2)
-		if _, err := io.ReadFull(conn, length); err != nil {
-			tcpErr <- err
-			return
-		}
-		data := make([]byte, binary.BigEndian.Uint16(length))
-		if _, err := io.ReadFull(conn, data); err != nil {
-			tcpErr <- err
-			return
-		}
-		req, err := packet.FromBytes(data)
-		if err != nil {
-			tcpErr <- err
-			return
-		}
-		res := packet.NewPacketFromRequest(req)
-		res.Header.QR = packet.DNSResponse
-		res.AddAnswer(&packet.DNSResourceRecordA{
-			DNSResourceRecord: packet.DNSResourceRecord{Name: "example.com", Type: packet.DNSTypeA, Class: packet.DNSClassIN, TTL: 60},
-			Address:           "192.0.2.1",
-		})
-		responseData := res.Bytes()
-		frame := make([]byte, 2+len(responseData))
-		binary.BigEndian.PutUint16(frame[:2], uint16(len(responseData)))
-		copy(frame[2:], responseData)
-		tcpErr <- writeFull(conn, frame)
-	}()
-
-	c := NewUDPClient(udpConn.LocalAddr().String())
-	c.Timeout = time.Second
-	defer c.Close()
-	res, err := c.Query(clientTestQuery())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Header.TC != 0 || len(res.Answers) != 1 {
-		t.Fatalf("expected complete TCP response, got TC=%d answers=%d", res.Header.TC, len(res.Answers))
-	}
-	if err := <-udpErr; err != nil {
-		t.Fatal(err)
-	}
-	if err := <-tcpErr; err != nil {
-		t.Fatal(err)
+	if d := time.Since(start); d > 400*time.Millisecond {
+		t.Fatalf("context deadline ignored (%v)", d)
 	}
 }

@@ -91,7 +91,7 @@ func (d *DNSResourceRecordEDNS) Encode() []byte {
 }
 
 func (r *DNSResourceRecordEDNS) Bytes() []byte {
-	r.syncTTL()
+	r.sync()
 	return r.WrapData(r.Encode())
 }
 
@@ -103,9 +103,17 @@ func (d *DNSResourceRecordEDNS) AddEDNSOption(code uint16, data []byte) {
 	})
 }
 
-// syncTTL updates the TTL field from ExtRCode, Version, and Flags.
-func (d *DNSResourceRecordEDNS) syncTTL() {
-	d.TTL = (uint32(d.ExtRCode) << 24) | (uint32(d.Version) << 16) | uint32(d.Flags)
+// sync derives the wire CLASS and TTL fields from UDPSize, ExtRCode,
+// Version, and Flags, which are the authoritative values.
+func (d *DNSResourceRecordEDNS) sync() {
+	d.Name = "."
+	d.Type = DNSTypeEDNS
+	d.Class = DNSClass(d.UDPSize)
+	d.TTL = d.wireTTL()
+}
+
+func (d *DNSResourceRecordEDNS) wireTTL() uint32 {
+	return (uint32(d.ExtRCode) << 24) | (uint32(d.Version) << 16) | uint32(d.Flags)
 }
 
 // AddEDNSOptionClientSubnet adds an EDNS Client Subnet option (RFC 7871).
@@ -170,8 +178,7 @@ func (d *DNSResourceRecordEDNS) SetDNSSECOK(do bool) {
 	} else {
 		d.Flags &^= 0x8000
 	}
-	// Update TTL to include the flags
-	d.TTL = (uint32(d.ExtRCode) << 24) | (uint32(d.Version) << 16) | uint32(d.Flags)
+	d.sync()
 }
 
 // GetDNSSECOK returns the DNSSEC OK (DO) flag status.

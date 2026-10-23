@@ -36,11 +36,13 @@ const (
 	DNSTypeRRSIG  DNSType = 0x2E   // DNSSEC signature
 	DNSTypeNSEC   DNSType = 0x2F   // authenticated denial of existence
 	DNSTypeDNSKEY DNSType = 0x30   // DNSSEC public key
+	DNSTypeNSEC3  DNSType = 0x32   // hashed authenticated denial of existence
 	DNSTypeTLSA   DNSType = 0x34   // TLS certificate association
 	DNSTypeSVCB   DNSType = 0x40   // service binding
 	DNSTypeHTTPS  DNSType = 0x41   // HTTPS service binding
 	DNSTypeSPF    DNSType = 0x63   // a Sender Policy Framework record
 	DNSTypeCAA    DNSType = 0x101  // certification authority authorization
+	DNSTypeIXFR   DNSType = 0xFB   // A request for an incremental zone transfer
 	DNSTypeAXFR   DNSType = 0xFC   // A request for a transfer of an entire zone
 	DNSTypeMAILB  DNSType = 0xFD   // A request for mailbox-related records (MB, MG or MR)
 	DNSTypeMAILA  DNSType = 0xFE   // A request for mail agent RRs (Obsolete - see MX)
@@ -106,7 +108,10 @@ func (code DNSOpCode) String() string {
 	}
 }
 
+// DNSResource is one resource record. Encode returns uncompressed RDATA and
+// Bytes the standalone uncompressed record; DNSPacket.Pack compresses names.
 type DNSResource interface {
+	Header() *DNSResourceRecord
 	Bytes() []byte
 	GetType() DNSType
 	Encode() []byte
@@ -142,6 +147,11 @@ type DNSResourceRecord struct {
 
 func (r *DNSResourceRecord) GetType() DNSType {
 	return r.Type
+}
+
+// Header returns the owner name, type, class, and TTL shared by all records.
+func (r *DNSResourceRecord) Header() *DNSResourceRecord {
+	return r
 }
 
 func ParseResource(reader *bytes.Reader) (record DNSResource, err error) {

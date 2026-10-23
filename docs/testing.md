@@ -1,71 +1,38 @@
-# 测试指南
-
-dns-go 有两种测试: 单元测试 (Go 标准 `go test`) 和端到端冒烟测试
-(`scripts/smoke.sh`,启动真实 server + dig 校验)。
+# 测试
 
 ## 单元测试
 
 ```bash
 go test ./...
+go test -race ./...    # zone.Store / filter.Filter 的无锁快照与并发客户端都有竞态测试
+go vet ./...
 ```
 
-按包跑某一组:
-
-```bash
-go test ./pipeline/...        # pipeline (cache→local→filter→proxy)
-go test ./filter/... -v       # AdBlock 规则解析
-go test ./config/...          # YAML 配置加载/校验
-go test ./cache/...           # TTL 钳制 / 过期 / 容量淘汰
-go test ./proxy/...           # failover 上游池
-```
-
-`go vet ./...` 与 `go build ./...` 默认会一起跑通。
+| 包 | 覆盖内容 |
+|----|---------|
+| `packet` | 编解码、名字压缩、截断打包（TC、OPT 保留、referral glue）、扩展 RCODE、AD/CD、并发编码只读、fuzz |
+| `zone` | 解析（含相对名字补全）、static/transparent 语义、通配符、委派、RRSIG 附带、CRUD、原子替换、hosts |
+| `filter` | 规则语法与优先级、allow 列表、命中规则上报、订阅（文件/URL/磁盘缓存/失败保留） |
+| `cache` | TTL 钳制与递减、RFC 2308 负缓存、不缓存 SERVFAIL/TC、DO/CD 分键、LRU |
+| `client` | 真实 UDP/TCP 监听：TC 回退 TCP、并发不串行、连接复用、伪造报文忽略、context |
+| `server` | UDP 大小上限、TCP 分帧/管线/空闲超时、关闭监听即返回、DoH GET/POST/Cache-Control |
+| `proxy` | failover（错误与 SERVFAIL/REFUSED）、context 取消 |
+| `engine` | 完整请求路径：EDNS/BADVERS/AD、权威与转发、transparent+CNAME 追踪、过滤在缓存前、真实 UDP 截断、QueryEvent、Service 热加载 |
+| `config` | 默认值与各类校验错误 |
 
 ## 端到端冒烟测试
 
-`scripts/smoke.sh` 启动一份 dns-go 实例,用 `dig` 跑 4 类查询, 校验
-响应是否符合预期:
-
-1. 本地 zone (BIND `zone_file`) 命中 — `nas.example.com → 192.168.1.100` 等
-2. Filter 阻断 — `doubleclick.net → 0.0.0.0`、`ad.doubleclick.net → 0.0.0.0`
-3. Proxy 上游解析 — `cloudflare.com → 真实 IP`
-4. 第二次查询 cache 命中
-
 ```bash
-./scripts/smoke.sh
-
-# 改端口 (默认 15353,macOS 上 5353 被 mDNSResponder 占着):
+./scripts/smoke.sh               # 默认端口 15353（macOS 的 5353 被 mDNSResponder 占用）
 PORT=15400 ./scripts/smoke.sh
 ```
 
-输出形如:
+脚本会编译并启动转发模式的实例，用 `dig` 校验 static zone、transparent 覆盖、过滤、上游加缓存，
+以及截断、OPT 回显、BADVERS、AXFR 拒绝等协议行为。上游相关的用例需要联网。
+任一用例失败时，脚本会打印服务端日志并以状态码 1 退出。
 
-```
-[1] local zone (BIND zone_file)
-  ✓ nas.example.com           A      -> 192.168.1.100
-  ✓ mail.example.com          A      -> 192.168.1.2
-  ...
-[2] filter block
-  ✓ doubleclick.net           A      -> 0.0.0.0
-  ...
-──────── result ────────
-  pass: 10
-  fail: 0
-```
-
-任一 case 失败时,脚本 exit 1 并把 server log 转出来。
-
-### 准备数据
-
-脚本默认引用:
-
-- `testdata/zones/example.com.zone` — 已 commit
-- `testdata/blocklists/adguard-dns.txt` — `.gitignore` 排除,需手动下载
-
-如果列表不存在, pipeline 会 log warn 后跳过, 但 `[2]` 用例会依赖默认
-`rules:` 块里的 `||doubleclick.net^` 兜底, 不会失败。
-
-下载真实 AdGuard 列表 (~3.7MB):
+AdGuard 列表文件（`testdata/blocklists/adguard-dns.txt`）不存在时会跳过并记录日志，
+过滤用例由内联规则兜底。如需完整列表，可以下载：
 
 ```bash
 mkdir -p testdata/blocklists
@@ -73,21 +40,10 @@ curl -sSL -o testdata/blocklists/adguard-dns.txt \
   https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt
 ```
 
-更多列表和 zone 文件示例参见 `testdata/README.md`。
-
-## 排错
-
-**`bind: address already in use`** — 之前的 dns-go 实例没退干净:
+## 手工验证
 
 ```bash
-pkill -f "cmd/dns-go"
-lsof -nP -iUDP:15353       # 找进程
+dig @127.0.0.1 -p 15353 +noedns +ignore big.example.net TXT   # 期望 flags 含 tc、≤512 字节
+dig @127.0.0.1 -p 15353 +edns=1 +noednsneg example.com        # 期望 status: BADVERS
+./dns-go -config config.yaml -log-queries                      # 每条查询的来源阶段与命中规则
 ```
-
-**MacOS 5353 端口被占** — `mDNSResponder` 用 5353 提供 mDNS,
-`config.yaml` 默认监听 `:5353`,本地直接 `go run ./cmd/dns-go` 会
-bind 失败。改 `addr: ":15353"` 或者用 `scripts/smoke.sh`。
-
-**dig 显示意外的 IP (例如 `198.18.x.x`)** — 这是 1.1.1.1 的拒绝/
-篡改响应,说明请求确实走到了上游。如果你期望命中本地 zone, 检查
-zone 文件是否真的被加载 (`go vet`/`server log` 里看 `local zones` 报错)。

@@ -16,7 +16,7 @@ const (
 //  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 //  |                      ID                       |
 //  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
-//  |QR|   Opcode  |AA|TC|RD|RA|   Z    |   RCODE   |
+//  |QR|   Opcode  |AA|TC|RD|RA| Z|AD|CD|   RCODE   |
 //  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
 //  |                    QDCOUNT                    |
 //  +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
@@ -32,11 +32,13 @@ type DNSHeader struct {
 	QR      uint8  // 0: query, 1: response
 	OpCode  uint8  // 0: standard query, 1: inverse query, 2: server status request, 3-15: reserved
 	AA      uint8  // 0: not authoritative, 1: authoritative
-	TC      uint8  // 0: truncated, 1: not truncated
-	RD      uint8  // 0: recursion desired, 1: recursion not desired
-	RA      uint8  // 0: recursion available, 1: recursion not available
-	Z       uint8  // 0: reserved, 1-255: code
-	RCode   uint8  // 0: no error, 1: format error, 2: server failure, 3: name error, 4: not implemented, 5: refused, 6-15: reserved
+	TC      uint8  // 1: message was truncated
+	RD      uint8  // 1: recursion desired
+	RA      uint8  // 1: recursion available
+	Z       uint8  // reserved, must be zero
+	AD      uint8  // 1: authentic data (RFC 4035)
+	CD      uint8  // 1: checking disabled (RFC 4035)
+	RCode   uint8  // low 4 bits of the response code; see RCode* constants
 	QDCount uint16 // Number of questions to expect
 	ANCount uint16 // Number of answers to expect
 	NSCount uint16 // Number of authority records to expect
@@ -76,7 +78,9 @@ func (h *DNSHeader) Parse(reader *bytes.Reader) error {
 		return err
 	}
 	h.RA = (flagsByte & 0x80) >> 7
-	h.Z = (flagsByte >> 4) & 0x07
+	h.Z = (flagsByte >> 6) & 0x01
+	h.AD = (flagsByte >> 5) & 0x01
+	h.CD = (flagsByte >> 4) & 0x01
 	h.RCode = flagsByte & 0x0F
 
 	if err := binary.Read(reader, binary.BigEndian, &h.QDCount); err != nil {
@@ -97,11 +101,23 @@ func (h *DNSHeader) Parse(reader *bytes.Reader) error {
 func (h *DNSHeader) Bytes() []byte {
 	data := make([]byte, 12)
 	binary.BigEndian.PutUint16(data[:2], h.ID)
-	data[2] = h.QR<<7 | h.OpCode<<3 | h.AA<<2 | h.TC<<1 | h.RD
-	data[3] = h.RA<<7 | h.Z<<4 | h.RCode
+	data[2] = h.QR<<7 | (h.OpCode&0x0F)<<3 | h.AA<<2 | h.TC<<1 | h.RD
+	data[3] = h.RA<<7 | h.Z<<6 | h.AD<<5 | h.CD<<4 | h.RCode&0x0F
 	binary.BigEndian.PutUint16(data[4:6], h.QDCount)
 	binary.BigEndian.PutUint16(data[6:8], h.ANCount)
 	binary.BigEndian.PutUint16(data[8:10], h.NSCount)
 	binary.BigEndian.PutUint16(data[10:12], h.ARCount)
 	return data
 }
+
+// Response codes (RFC 1035, RFC 6891). Codes above 15 need an OPT record to
+// carry the upper 8 bits; see DNSPacket.SetRCode.
+const (
+	RCodeSuccess        uint16 = 0
+	RCodeFormatError    uint16 = 1
+	RCodeServerFailure  uint16 = 2
+	RCodeNameError      uint16 = 3
+	RCodeNotImplemented uint16 = 4
+	RCodeRefused        uint16 = 5
+	RCodeBadVersion     uint16 = 16
+)

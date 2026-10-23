@@ -1,28 +1,11 @@
 # testdata
 
-`testdata/` 是手动跑服务/测试时用的本地数据目录。Go 工具链不会把
-这里的内容编进 build 产物，但 `_test.go` 可以用相对路径读取它们。
+手动运行服务和测试时使用的本地数据。
 
-## 目录布局
+- `zones/` — BIND 格式的 zone 文件，供 `domains[].zone_file` 使用。
+- `blocklists/` — AdBlock 格式的过滤列表，供 `filters.lists[].file` 使用（已被 `.gitignore` 排除，需要时手动下载，见 `docs/testing.md`）。
 
-- `zones/` — BIND 风格的 zone 文件示例，给 `domains[].zone_file` 用。
-- `blocklists/` — AdBlock 风格的过滤规则文件，给 `filters.blocklists[].file` 用。
+通常不需要手动下载：在 `filters.lists[]` 里写 `url`，服务会自动下载、定时刷新，
+并缓存到 `filters.cache_dir`。
 
-## 更新过滤规则
-
-下面这些大文件已经在 `.gitignore` 里排除掉，需要时手动下载：
-
-```bash
-mkdir -p testdata/blocklists
-curl -sSL -o testdata/blocklists/adguard-dns.txt \
-  https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt
-```
-
-仓库根目录的 `config.yaml` 默认引用 `testdata/blocklists/adguard-dns.txt`。
-列表不存在时 pipeline 会 log warn 后跳过，不影响启动。
-
-## hosts 文件
-
-不要把 `/etc/hosts` 风格的 `0.0.0.0 domain` 文件喂给 `filters.blocklists`
-—— filter 包只解析 AdBlock 规则。这类文件如果将来支持，会作为 zone 的
-另一种输入格式归到 `domains` 那一侧。
+hosts 格式（`0.0.0.0 name`）不是过滤规则，请用 `domains[].hosts_file` 加载为 transparent zone。

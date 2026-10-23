@@ -1,76 +1,83 @@
 package server
 
 import (
-	"io"
-	"log"
+	"context"
+	"errors"
 	"net"
 
 	"github.com/lsongdev/dns-go/packet"
 )
 
-type PackConn struct {
-	io.Writer
-	RemoteAddr string
-	Request    *packet.DNSPacket
+// UDPServer serves DNS over a packet connection.
+type UDPServer struct {
+	Handler Handler
+	// MaxUDPSize caps response size regardless of the client's EDNS buffer
+	// size. Zero means DefaultUDPSize.
+	MaxUDPSize int
+	// MaxConcurrent bounds in-flight queries; when reached the read loop
+	// stops reading and the kernel socket buffer absorbs (or drops) bursts.
+	// Zero means 1024.
+	MaxConcurrent int
 }
 
-func (p *PackConn) WriteResponse(res *packet.DNSPacket) error {
-	res.Header.QR = packet.DNSResponse
-	_, err := p.Write(res.Bytes())
-	return err
-}
-
-type DNSHandler interface {
-	HandleQuery(conn *PackConn)
-}
-
-func ListenUDP(addr string, handler DNSHandler) error {
+// ListenUDP serves h on addr until the socket fails.
+func ListenUDP(addr string, h Handler) error {
 	conn, err := net.ListenPacket("udp", addr)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	return serveUDP(conn, handler)
+	return (&UDPServer{Handler: h}).Serve(conn)
 }
 
-type UdpWritter struct {
-	net.PacketConn
-	addr net.Addr
-}
-
-func (w *UdpWritter) Write(data []byte) (int, error) {
-	return w.WriteTo(data, w.addr)
-}
-
-func serveUDP(conn net.PacketConn, h DNSHandler) error {
-	buf := make([]byte, 4096)
+// Serve reads queries from conn until it is closed. Closing conn makes Serve
+// return nil and cancels in-flight handlers.
+func (s *UDPServer) Serve(conn net.PacketConn) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	limit := s.MaxConcurrent
+	if limit <= 0 {
+		limit = 1024
+	}
+	sem := make(chan struct{}, limit)
+	buf := make([]byte, packet.MaxMessageSize)
 	for {
 		n, remote, err := conn.ReadFrom(buf)
 		if err != nil {
-			log.Printf("Error reading packet: %v", err)
-			continue
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				continue
+			}
+			return err
 		}
-
-		// Copy off the shared read buffer before handing to a goroutine —
-		// FromBytes may keep slices into the input (name-compression pointers
-		// chase back through the original byte stream via reader.Seek), and
-		// the next ReadFrom will overwrite buf in place.
-		data := make([]byte, n)
-		copy(data, buf[:n])
-
-		req, err := packet.FromBytes(data)
+		// Decoded records may alias their input, and buf is reused.
+		req, err := packet.FromBytes(append([]byte(nil), buf[:n]...))
 		if err != nil {
-			log.Printf("Error decoding packet: %v", err)
-			continue
+			continue // not a DNS message; replying would aid reflection
 		}
-		pc := &PackConn{
-			Writer: &UdpWritter{
-				conn,
-				remote,
-			},
-			RemoteAddr: remote.String(),
-			Request:    req,
-		}
-		go h.HandleQuery(pc)
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem }()
+			s.Handler.ServeDNS(ctx, &udpWriter{conn: conn, remote: remote, req: req, max: s.MaxUDPSize}, req)
+		}()
 	}
 }
+
+type udpWriter struct {
+	conn   net.PacketConn
+	remote net.Addr
+	req    *packet.DNSPacket
+	max    int
+}
+
+func (w *udpWriter) WriteMsg(res *packet.DNSPacket) error {
+	data, _ := res.Pack(UDPLimit(w.req, w.max))
+	_, err := w.conn.WriteTo(data, w.remote)
+	return err
+}
+
+func (w *udpWriter) RemoteAddr() net.Addr { return w.remote }
+func (w *udpWriter) Transport() Transport { return TransportUDP }

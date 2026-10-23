@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	"github.com/lsongdev/dns-go/client"
@@ -48,7 +49,7 @@ func main() {
 	query.AddQuestionTXT("google.com")
 	// query.AddQuestionAAAA("lsong.org")
 	// query.AddQuestionCNAME("lsong.org")
-	res, err := c.Query(query)
+	res, err := c.Query(context.Background(), query)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -28,3 +28,7 @@ func (r *DNSResourceRecordPTR) Encode() []byte {
 func (r *DNSResourceRecordPTR) Bytes() []byte {
 	return r.WrapData(r.Encode())
 }
+
+func (d *DNSResourceRecordPTR) packRData(e *encoder) {
+	e.name(d.PtrDomainName, true)
+}
