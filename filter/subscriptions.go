@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,6 +21,10 @@ const (
 	DefaultRefresh    = 24 * time.Hour
 	retryAfterFailure = 5 * time.Minute
 	maxListSize       = 64 << 20
+	// fetchTimeout bounds one download. Lists are megabytes and may come
+	// over slow links, so there is no shorter total timeout; stalled
+	// connections are caught by the transport's dial and header timeouts.
+	fetchTimeout = 5 * time.Minute
 )
 
 // Source is a rule list loaded from a URL or a local file.
@@ -59,7 +64,7 @@ type Subscriptions struct {
 
 // SubscriptionOptions configures Subscriptions.
 type SubscriptionOptions struct {
-	Client   *http.Client // nil uses a client with a 60s timeout
+	Client   *http.Client // nil uses a client with dial and header timeouts
 	CacheDir string       // empty disables the on-disk cache
 	// OnUpdate, if set, is called after every load attempt with the
 	// source's new status (Error set on failure).
@@ -78,7 +83,13 @@ type subscription struct {
 func NewSubscriptions(f *Filter, opts SubscriptionOptions) *Subscriptions {
 	client := opts.Client
 	if client == nil {
-		client = &http.Client{Timeout: 60 * time.Second}
+		client = &http.Client{Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   15 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			ForceAttemptHTTP2:     true,
+		}}
 	}
 	return &Subscriptions{filter: f, client: client, cacheDir: opts.CacheDir, onUpdate: opts.OnUpdate, entries: make(map[string]*subscription)}
 }
@@ -281,6 +292,8 @@ func (s *Subscriptions) fetch(ctx context.Context, src Source) ([]byte, error) {
 	if src.File != "" {
 		return os.ReadFile(src.File)
 	}
+	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src.URL, nil)
 	if err != nil {
 		return nil, err
