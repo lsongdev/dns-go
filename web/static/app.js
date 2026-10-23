@@ -64,14 +64,14 @@ function App() {
   const Page = page.component;
   return html`
     <div class="layout">
-      <header class="topbar">
-        <div class="topbar-inner">
-          <a class="brand" href="#/dashboard"><span class="logo" aria-hidden="true">◆</span>dns-go</a>
+      <header class="masthead">
+        <h1 class="brand"><a href="#/dashboard"><span class="logo" aria-hidden="true">◆</span>dns-go</a></h1>
+        <div class="nav-row">
           <nav aria-label="Sections">
             ${pages.map((p) => html`
               <a href=${`#/${p.id}`} class=${p.id === page.id ? 'active' : ''} aria-current=${p.id === page.id ? 'page' : undefined}>${p.label}</a>`)}
           </nav>
-          <div class="topbar-meta">
+          <div class="nav-meta">
             <span class=${`badge mode-${status.mode}`} title=${`Data stored in ${status.storage}`}>${status.mode} · ${status.storage}</span>
             ${getToken() && html`<button class="link small" onClick=${() => { setToken(''); setNeedLogin(true); }}>Sign out</button>`}
           </div>
