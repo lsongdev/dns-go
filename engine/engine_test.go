@@ -495,6 +495,9 @@ filters:
 		t.Fatal(err)
 	}
 	defer svc.Close()
+	if err := svc.Apply(cfg.Data); err != nil {
+		t.Fatal(err)
+	}
 	e := svc.Engine
 	check := func(name string, wantRCode uint16, wantSource Source) {
 		t.Helper()
@@ -512,7 +515,7 @@ filters:
 	cfg.Domains[0].Records = []string{"nas 60 IN A 192.168.1.11"}
 	cfg.Filters.Rules = nil
 	cfg.Filters.BlockMode = "zero_ip"
-	if err := svc.Apply(cfg); err != nil {
+	if err := svc.Apply(cfg.Data); err != nil {
 		t.Fatal(err)
 	}
 	if r := resolve(e, query("nas.home.lan", packet.DNSTypeA)); r.Msg.Answers[0].(*packet.DNSResourceRecordA).Address != "192.168.1.11" {
@@ -528,18 +531,21 @@ filters:
 		t.Fatal("removed inline rule still blocks")
 	}
 
-	bad := *cfg
+	bad := cfg.Data.Clone()
 	bad.Domains = []config.DomainSpec{{Domain: "home.lan", Kind: "static", Records: []string{"x IN CNAME y.", "x IN A 1.2.3.4"}}}
-	if err := svc.Apply(&bad); err == nil {
+	if err := svc.Apply(bad); err == nil {
 		t.Fatal("invalid zone data must be rejected")
 	}
 	if r := resolve(e, query("nas.home.lan", packet.DNSTypeA)); len(r.Msg.Answers) != 1 {
 		t.Fatal("failed reload must keep the running zones")
 	}
-	bad = *cfg
-	bad.Mode = config.ModeAuthoritative
-	if err := svc.Apply(&bad); err == nil {
-		t.Fatal("mode changes need a restart")
+	bad = cfg.Data.Clone()
+	bad.Filters.Lists = append(bad.Filters.Lists, config.ListSpec{Name: "broken", Kind: "block"})
+	if err := svc.Apply(bad); err == nil {
+		t.Fatal("invalid filter lists must be rejected")
+	}
+	if r := resolve(e, query("nas.home.lan", packet.DNSTypeA)); len(r.Msg.Answers) != 1 {
+		t.Fatal("a rejected Apply must not change anything")
 	}
 }
 
@@ -612,12 +618,12 @@ upstreams: [{type: udp, addr: "127.0.0.1:1"}]
 	if err != nil {
 		t.Fatal(err)
 	}
-	rules, err := AccessRulesFromConfig(fwd)
+	rules, err := AccessRules(fwd.Mode, fwd.Access)
 	if err != nil || len(rules.Allow) != len(access.Private) {
 		t.Fatalf("forwarding default should be private networks: %+v %v", rules.Allow, err)
 	}
 	fwd.Access.Allow = &[]string{}
-	if rules, _ := AccessRulesFromConfig(fwd); rules.Allow == nil || len(rules.Allow) != 0 {
+	if rules, _ := AccessRules(fwd.Mode, fwd.Access); rules.Allow == nil || len(rules.Allow) != 0 {
 		t.Fatal("explicit empty allow means nobody without an ID")
 	}
 	auth, err := config.Parse([]byte(`
@@ -628,11 +634,11 @@ domains: [{domain: a.com, records: ["@ IN A 192.0.2.1"]}]
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rules, _ := AccessRulesFromConfig(auth); rules.Allow != nil {
+	if rules, _ := AccessRules(auth.Mode, auth.Access); rules.Allow != nil {
 		t.Fatal("authoritative default should allow everyone")
 	}
 	fwd.Access.Allow = &[]string{"not-a-network"}
-	if _, err := AccessRulesFromConfig(fwd); err == nil {
+	if _, err := AccessRules(fwd.Mode, fwd.Access); err == nil {
 		t.Fatal("invalid network should fail")
 	}
 }

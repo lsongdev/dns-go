@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -35,18 +36,46 @@ const (
 	ModeForwarding    = "forwarding"
 )
 
+// Config is the whole file: process settings (fixed for the life of the
+// process) plus the inline Data, which is what the management API edits.
+// Where Data is kept at runtime is chosen by Storage; the rest of the
+// program only ever sees a Data value.
 type Config struct {
 	// Mode is "authoritative" (serve zones only, REFUSED elsewhere, no
 	// recursion) or "forwarding" (resolve through upstreams, with local
 	// zones, filtering, and caching). Default: forwarding.
 	Mode      string         `yaml:"mode"`
 	Listens   []ListenSpec   `yaml:"listens"`
-	Domains   []DomainSpec   `yaml:"domains,omitempty"`
 	Upstreams []UpstreamSpec `yaml:"upstreams,omitempty"`
 	Cache     CacheSpec      `yaml:"cache,omitempty"`
-	Filters   FiltersSpec    `yaml:"filters,omitempty"`
-	Access    AccessSpec     `yaml:"access,omitempty"`
 	API       APISpec        `yaml:"api,omitempty"`
+	// DataDir holds downloaded filter lists and, by default, the database.
+	// Default: "data".
+	DataDir string      `yaml:"data_dir,omitempty"`
+	Storage StorageSpec `yaml:"storage,omitempty"`
+
+	Data `yaml:",inline"`
+}
+
+// Data is the runtime-managed configuration: zones, filters, and access.
+type Data struct {
+	Domains []DomainSpec `yaml:"domains,omitempty"`
+	Filters FiltersSpec  `yaml:"filters,omitempty"`
+	Access  AccessSpec   `yaml:"access,omitempty"`
+}
+
+const (
+	// StorageConfig keeps Data in the config file itself (default).
+	StorageConfig = "config"
+	// StorageSQLite keeps Data in a SQLite database. A new database is
+	// seeded once from the config file's data sections.
+	StorageSQLite = "sqlite"
+)
+
+// StorageSpec selects where Data lives.
+type StorageSpec struct {
+	Type string `yaml:"type,omitempty"` // config (default) | sqlite
+	Path string `yaml:"path,omitempty"` // sqlite: database file; default <data_dir>/dns-go.db
 }
 
 // APISpec enables the HTTP management API and web panel.
@@ -124,7 +153,6 @@ type FiltersSpec struct {
 	// BlockMode is how blocked names are answered: "zero_ip" (A 0.0.0.0,
 	// AAAA ::, other types NODATA; default), "nxdomain", or "refused".
 	BlockMode string     `yaml:"block_mode,omitempty"`
-	CacheDir  string     `yaml:"cache_dir,omitempty"` // keeps downloaded lists across restarts
 	Lists     []ListSpec `yaml:"lists,omitempty"`
 	Rules     []string   `yaml:"rules,omitempty"` // inline rules, installed as list "rules"
 }
@@ -169,28 +197,14 @@ func Load(path string) (*Config, error) {
 	return Parse(data)
 }
 
-// Save writes c to path atomically (temp file + rename). Comments in an
-// existing file are not preserved.
-func (c *Config) Save(path string) error {
-	data, err := yaml.Marshal(c)
+// Clone returns a deep copy of d.
+func (d Data) Clone() Data {
+	raw, err := yaml.Marshal(d)
 	if err != nil {
-		return err
+		panic(err) // Data contains only marshalable fields
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
-// Clone returns a deep copy of c.
-func (c *Config) Clone() *Config {
-	data, err := yaml.Marshal(c)
-	if err != nil {
-		panic(err) // Config contains only marshalable fields
-	}
-	out := &Config{}
-	if err := yaml.Unmarshal(data, out); err != nil {
+	var out Data
+	if err := yaml.Unmarshal(raw, &out); err != nil {
 		panic(err)
 	}
 	return out
@@ -221,15 +235,16 @@ func (c *Config) applyDefaults() {
 	if c.Cache.MaxEntries == 0 {
 		c.Cache.MaxEntries = 10000
 	}
-	for i := range c.Domains {
-		d := &c.Domains[i]
-		if d.Kind == "" {
-			d.Kind = "static"
-			if d.HostsFile != "" {
-				d.Kind = "transparent"
-			}
-		}
+	if c.DataDir == "" {
+		c.DataDir = "data"
 	}
+	if c.Storage.Type == "" {
+		c.Storage.Type = StorageConfig
+	}
+	if c.Storage.Type == StorageSQLite && c.Storage.Path == "" {
+		c.Storage.Path = filepath.Join(c.DataDir, "dns-go.db")
+	}
+	c.Data.ApplyDefaults()
 	for i := range c.Upstreams {
 		u := &c.Upstreams[i]
 		if u.Type == "doh" && u.Method == "" {
@@ -239,12 +254,25 @@ func (c *Config) applyDefaults() {
 			u.Timeout = Duration(5 * time.Second)
 		}
 	}
-	if c.Filters.BlockMode == "" {
-		c.Filters.BlockMode = "zero_ip"
+}
+
+// ApplyDefaults fills omitted fields of d.
+func (d *Data) ApplyDefaults() {
+	for i := range d.Domains {
+		dom := &d.Domains[i]
+		if dom.Kind == "" {
+			dom.Kind = "static"
+			if dom.HostsFile != "" {
+				dom.Kind = "transparent"
+			}
+		}
 	}
-	for i := range c.Filters.Lists {
-		if c.Filters.Lists[i].Kind == "" {
-			c.Filters.Lists[i].Kind = "block"
+	if d.Filters.BlockMode == "" {
+		d.Filters.BlockMode = "zero_ip"
+	}
+	for i := range d.Filters.Lists {
+		if d.Filters.Lists[i].Kind == "" {
+			d.Filters.Lists[i].Kind = "block"
 		}
 	}
 }
@@ -272,28 +300,6 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("listens[%d]: dot requires cert_file and key_file", i)
 		}
 	}
-	for i, d := range c.Domains {
-		sources := 0
-		for _, set := range []bool{len(d.Records) > 0, d.ZoneFile != "", d.HostsFile != ""} {
-			if set {
-				sources++
-			}
-		}
-		if sources > 1 {
-			return fmt.Errorf("domains[%d]: only one of records, zone_file, hosts_file allowed", i)
-		}
-		if d.HostsFile == "" && d.Domain == "" {
-			return fmt.Errorf("domains[%d]: domain required", i)
-		}
-		switch d.Kind {
-		case "static", "transparent":
-		default:
-			return fmt.Errorf("domains[%d]: kind %q invalid (want static or transparent)", i, d.Kind)
-		}
-		if d.HostsFile != "" && d.Kind != "transparent" {
-			return fmt.Errorf("domains[%d]: hosts_file domains are always transparent", i)
-		}
-	}
 	for i, u := range c.Upstreams {
 		switch u.Type {
 		case "udp", "tcp", "dot", "doh":
@@ -310,11 +316,6 @@ func (c *Config) Validate() error {
 	if err := c.API.validate(); err != nil {
 		return err
 	}
-	switch c.Access.DenyAction {
-	case "", "refuse", "drop":
-	default:
-		return fmt.Errorf("access.deny_action %q invalid (want refuse or drop)", c.Access.DenyAction)
-	}
 	for i, l := range c.Listens {
 		if len(l.TrustedProxies) > 0 && l.Type != "doh" {
 			return fmt.Errorf("listens[%d]: trusted_proxies only applies to doh", i)
@@ -323,13 +324,60 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("listens[%d]: hostname needs TLS (cert_file/key_file)", i)
 		}
 	}
-	switch c.Filters.BlockMode {
+	switch c.Storage.Type {
+	case StorageConfig, StorageSQLite:
+	default:
+		return fmt.Errorf("storage.type %q invalid (want config or sqlite)", c.Storage.Type)
+	}
+	switch c.Mode {
+	case ModeAuthoritative:
+		if c.Cache.Enabled || len(c.Upstreams) > 0 {
+			return fmt.Errorf("authoritative mode cannot configure cache or upstreams")
+		}
+	case ModeForwarding:
+		if len(c.Upstreams) == 0 {
+			return fmt.Errorf("forwarding mode requires at least one upstream")
+		}
+	}
+	return c.Data.Validate(c.Mode)
+}
+
+// Validate checks d for the given mode.
+func (d *Data) Validate(mode string) error {
+	for i, dom := range d.Domains {
+		sources := 0
+		for _, set := range []bool{len(dom.Records) > 0, dom.ZoneFile != "", dom.HostsFile != ""} {
+			if set {
+				sources++
+			}
+		}
+		if sources > 1 {
+			return fmt.Errorf("domains[%d]: only one of records, zone_file, hosts_file allowed", i)
+		}
+		if dom.HostsFile == "" && dom.Domain == "" {
+			return fmt.Errorf("domains[%d]: domain required", i)
+		}
+		switch dom.Kind {
+		case "static", "transparent":
+		default:
+			return fmt.Errorf("domains[%d]: kind %q invalid (want static or transparent)", i, dom.Kind)
+		}
+		if dom.HostsFile != "" && dom.Kind != "transparent" {
+			return fmt.Errorf("domains[%d]: hosts_file domains are always transparent", i)
+		}
+	}
+	switch d.Access.DenyAction {
+	case "", "refuse", "drop":
+	default:
+		return fmt.Errorf("access.deny_action %q invalid (want refuse or drop)", d.Access.DenyAction)
+	}
+	switch d.Filters.BlockMode {
 	case "zero_ip", "nxdomain", "refused":
 	default:
-		return fmt.Errorf("filters.block_mode %q invalid (want zero_ip, nxdomain, or refused)", c.Filters.BlockMode)
+		return fmt.Errorf("filters.block_mode %q invalid (want zero_ip, nxdomain, or refused)", d.Filters.BlockMode)
 	}
 	names := map[string]bool{RulesListName: true}
-	for i, l := range c.Filters.Lists {
+	for i, l := range d.Filters.Lists {
 		if l.Name == "" {
 			return fmt.Errorf("filters.lists[%d]: name required", i)
 		}
@@ -345,22 +393,14 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	switch c.Mode {
-	case ModeAuthoritative:
-		if len(c.Domains) == 0 {
-			return fmt.Errorf("authoritative mode requires at least one domain")
-		}
-		for i, d := range c.Domains {
-			if d.Kind != "static" {
+	if mode == ModeAuthoritative {
+		for i, dom := range d.Domains {
+			if dom.Kind != "static" {
 				return fmt.Errorf("domains[%d]: authoritative mode serves only static zones", i)
 			}
 		}
-		if c.Cache.Enabled || len(c.Upstreams) > 0 || len(c.Filters.Rules) > 0 || len(c.Filters.Lists) > 0 {
-			return fmt.Errorf("authoritative mode cannot configure cache, upstreams, or filters")
-		}
-	case ModeForwarding:
-		if len(c.Upstreams) == 0 {
-			return fmt.Errorf("forwarding mode requires at least one upstream")
+		if len(d.Filters.Rules) > 0 || len(d.Filters.Lists) > 0 {
+			return fmt.Errorf("authoritative mode cannot configure filters")
 		}
 	}
 	return nil

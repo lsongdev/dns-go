@@ -58,6 +58,8 @@ func NewHandler(mgr *Manager, stats *Stats, opts Options) *Handler {
 		"PUT /api/zones/{zone}":                  h.putZone,
 		"DELETE /api/zones/{zone}":               h.deleteZone,
 		"POST /api/zones/{zone}/records":         h.addRecord,
+		"PUT /api/zones/{zone}/records/{id}":     h.putRecord,
+		"DELETE /api/zones/{zone}/records/{id}":  h.deleteRecord,
 		"GET /api/filters":                       h.getFilters,
 		"PUT /api/filters/rules":                 h.putRules,
 		"PUT /api/filters/block_mode":            h.putBlockMode,
@@ -179,6 +181,7 @@ func decode(r *http.Request, v any) error {
 type statusBody struct {
 	Version   string        `json:"version"`
 	Mode      string        `json:"mode"`
+	Storage   string        `json:"storage"`
 	Uptime    int64         `json:"uptime_seconds"`
 	Listens   []listenBody  `json:"listens"`
 	Upstreams []string      `json:"upstreams"`
@@ -211,14 +214,15 @@ func version() string {
 }
 
 func (h *Handler) status(r *http.Request) (any, error) {
-	cfg := h.mgr.Config()
+	cfg, d := h.mgr.Settings(), h.mgr.Data()
 	svc := h.mgr.Service()
 	out := statusBody{
 		Version: version(),
 		Mode:    cfg.Mode,
+		Storage: cfg.Storage.Type,
 		Uptime:  int64(time.Since(h.started).Seconds()),
 		Zones:   len(svc.Zones.List()),
-		Clients: len(cfg.Access.Clients),
+		Clients: len(d.Access.Clients),
 	}
 	for _, l := range cfg.Listens {
 		out.Listens = append(out.Listens, listenBody{Type: l.Type, Addr: l.Addr, TLS: l.CertFile != ""})
@@ -360,6 +364,7 @@ func (h *Handler) flushCache(r *http.Request) (any, error) {
 // in zone-file presentation format; relative names in it are completed with
 // the zone origin.
 type recordBody struct {
+	ID   string `json:"id,omitempty"` // content-derived; changes when the record does
 	Name string `json:"name"`
 	TTL  uint32 `json:"ttl"`
 	Type string `json:"type"`
@@ -408,24 +413,24 @@ func displayOrigin(origin string) string {
 	return origin
 }
 
-// findDomain returns the index of the configured domain with origin.
-func findDomain(cfg *config.Config, origin string) int {
-	for i, d := range cfg.Domains {
-		if zone.CanonicalName(d.Domain) == origin {
+// findDomain returns the index of the domain with origin, or -1.
+func findDomain(d *config.Data, origin string) int {
+	for i, dom := range d.Domains {
+		if zone.CanonicalName(dom.Domain) == origin {
 			return i
 		}
 	}
 	return -1
 }
 
-func summarize(d config.DomainSpec, z *zone.Zone) zoneSummary {
-	origin := zone.CanonicalName(d.Domain)
-	s := zoneSummary{ID: zoneID(origin), Origin: displayOrigin(origin), Kind: d.Kind, Source: "records", Editable: true}
+func summarize(dom config.DomainSpec, z *zone.Zone) zoneSummary {
+	origin := zone.CanonicalName(dom.Domain)
+	s := zoneSummary{ID: zoneID(origin), Origin: displayOrigin(origin), Kind: dom.Kind, Source: "records", Editable: true}
 	switch {
-	case d.ZoneFile != "":
-		s.Source, s.Path, s.Editable = "zone_file", d.ZoneFile, false
-	case d.HostsFile != "":
-		s.Source, s.Path, s.Editable = "hosts_file", d.HostsFile, false
+	case dom.ZoneFile != "":
+		s.Source, s.Path, s.Editable = "zone_file", dom.ZoneFile, false
+	case dom.HostsFile != "":
+		s.Source, s.Path, s.Editable = "hosts_file", dom.HostsFile, false
 	}
 	if z != nil {
 		s.Records = len(z.Records)
@@ -434,28 +439,41 @@ func summarize(d config.DomainSpec, z *zone.Zone) zoneSummary {
 }
 
 func (h *Handler) listZones(r *http.Request) (any, error) {
-	cfg := h.mgr.Config()
+	d := h.mgr.Data()
 	out := []zoneSummary{}
-	for _, d := range cfg.Domains {
-		z, _ := h.mgr.Service().Zones.Get(d.Domain)
-		out = append(out, summarize(d, z))
+	for _, dom := range d.Domains {
+		z, _ := h.mgr.Service().Zones.Get(dom.Domain)
+		out = append(out, summarize(dom, z))
 	}
 	return out, nil
 }
 
 func (h *Handler) getZone(r *http.Request) (any, error) {
 	origin := originFromID(r.PathValue("zone"))
-	cfg := h.mgr.Config()
-	i := findDomain(cfg, origin)
+	d := h.mgr.Data()
+	i := findDomain(&d, origin)
 	if i < 0 {
 		return nil, &NotFoundError{"zone " + displayOrigin(origin)}
 	}
+	dom := d.Domains[i]
 	z, _ := h.mgr.Service().Zones.Get(origin)
-	out := zoneBody{zoneSummary: summarize(cfg.Domains[i], z), RecordList: []recordBody{}}
-	if z != nil {
+	out := zoneBody{zoneSummary: summarize(dom, z), RecordList: []recordBody{}}
+	if out.Editable {
+		// Editable zones list their stored lines, so IDs match what an
+		// update will look up.
+		for _, line := range dom.Records {
+			if rt, err := zone.ParseRecordText(displayOrigin(origin), line); err == nil {
+				out.RecordList = append(out.RecordList, recordOf(rt))
+			}
+		}
+	} else if z != nil {
 		out.RecordList = recordList(z.Records, origin)
 	}
 	return out, nil
+}
+
+func recordOf(rt zone.RecordText) recordBody {
+	return recordBody{ID: rt.ID(), Name: rt.Name, TTL: rt.TTL, Type: rt.Type, Data: rt.Data}
 }
 
 func recordList(records []packet.DNSResource, origin string) []recordBody {
@@ -464,45 +482,25 @@ func recordList(records []packet.DNSResource, origin string) []recordBody {
 		if r.GetType() == packet.DNSTypeEDNS {
 			continue
 		}
-		hdr := r.Header()
-		out = append(out, recordBody{
-			Name: relativeName(hdr.Name, origin),
-			TTL:  hdr.TTL,
-			Type: zone.TypeString(hdr.Type),
-			Data: zone.FormatRData(r),
-		})
+		out = append(out, recordOf(zone.TextOf(r, origin)))
 	}
 	return out
 }
 
-func relativeName(name, origin string) string {
-	name = zone.CanonicalName(name)
-	switch {
-	case name == origin:
-		return "@"
-	case origin == "":
-		return name + "."
-	case strings.HasSuffix(name, "."+origin):
-		return strings.TrimSuffix(name, "."+origin)
-	default:
-		return name + "."
-	}
-}
-
-// recordLines validates records and renders them as zone-file lines.
-func recordLines(origin string, records []recordBody) ([]string, error) {
-	lines := make([]string, 0, len(records))
-	for i, rec := range records {
+// recordTexts validates records and returns them in canonical form.
+func recordTexts(origin string, records []recordBody) ([]zone.RecordText, error) {
+	out := make([]zone.RecordText, 0, len(records))
+	for _, rec := range records {
 		name := strings.TrimSpace(rec.Name)
 		if name == "" {
 			name = "@"
 		}
 		if strings.ContainsAny(name, " \t\";") {
-			return nil, badRequest("records[%d]: invalid name %q", i, rec.Name)
+			return nil, badRequest("invalid name %q", rec.Name)
 		}
 		typ, err := zone.ParseType(rec.Type)
 		if err != nil {
-			return nil, badRequest("records[%d]: %v", i, err)
+			return nil, badRequest("%v", err)
 		}
 		ttl := rec.TTL
 		if ttl == 0 {
@@ -510,25 +508,24 @@ func recordLines(origin string, records []recordBody) ([]string, error) {
 		}
 		data := strings.TrimSpace(rec.Data)
 		if data == "" || strings.ContainsAny(data, "\n\r;") {
-			return nil, badRequest("records[%d]: invalid data %q", i, rec.Data)
+			return nil, badRequest("invalid data %q", rec.Data)
 		}
-		line := fmt.Sprintf("%s %d IN %s %s", name, ttl, zone.TypeString(typ), data)
-		parsed, err := zone.ParseString(displayOrigin(origin), line)
+		line := zone.RecordText{Name: name, TTL: ttl, Type: zone.TypeString(typ), Data: data}
+		rt, err := zone.ParseRecordText(displayOrigin(origin), line.String())
 		if err != nil {
-			msg := err.Error()
-			if _, rest, ok := strings.Cut(msg, ": "); ok && strings.HasPrefix(msg, "line ") {
-				msg = rest
-			}
-			return nil, badRequest("%s %s %s: %s", name, zone.TypeString(typ), data, msg)
+			return nil, badRequest("%s %s %s: %v", name, line.Type, data, err)
 		}
-		if len(parsed.Records) != 1 {
-			return nil, badRequest("%s %s %s: expected exactly one record", name, zone.TypeString(typ), data)
-		}
-		// Store a canonical form: relative owner, normalized RDATA.
-		r := parsed.Records[0]
-		lines = append(lines, fmt.Sprintf("%s %d IN %s %s", relativeName(r.Header().Name, origin), ttl, zone.TypeString(typ), zone.FormatRData(r)))
+		out = append(out, rt)
 	}
-	return lines, nil
+	return out, nil
+}
+
+func lines(records []zone.RecordText) []string {
+	out := make([]string, len(records))
+	for i, r := range records {
+		out[i] = r.String()
+	}
+	return out
 }
 
 func normalizeKind(kind string) (string, error) {
@@ -555,15 +552,15 @@ func (h *Handler) createZone(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	lines, err := recordLines(origin, req.Records)
+	records, err := recordTexts(origin, req.Records)
 	if err != nil {
 		return nil, err
 	}
-	err = h.mgr.Update(func(cfg *config.Config) error {
-		if findDomain(cfg, origin) >= 0 {
+	err = h.mgr.Update(r.Context(), func(d *config.Data) error {
+		if findDomain(d, origin) >= 0 {
 			return &conflictError{"zone " + origin + " already exists"}
 		}
-		cfg.Domains = append(cfg.Domains, config.DomainSpec{Domain: origin, Kind: kind, Records: lines})
+		d.Domains = append(d.Domains, config.DomainSpec{Domain: origin, Kind: kind, Records: lines(records)})
 		return nil
 	})
 	if err != nil {
@@ -573,79 +570,114 @@ func (h *Handler) createZone(r *http.Request) (any, error) {
 	return h.getZone(r)
 }
 
-func (h *Handler) putZone(r *http.Request) (any, error) {
+// updateZone runs fn on the editable zone named in the request path.
+func (h *Handler) updateZone(r *http.Request, fn func(*config.DomainSpec) error) (any, error) {
 	origin := originFromID(r.PathValue("zone"))
+	err := h.mgr.Update(r.Context(), func(d *config.Data) error {
+		i := findDomain(d, origin)
+		if i < 0 {
+			return &NotFoundError{"zone " + displayOrigin(origin)}
+		}
+		dom := &d.Domains[i]
+		if dom.ZoneFile != "" || dom.HostsFile != "" {
+			return &conflictError{"zone " + displayOrigin(origin) + " is loaded from a file; edit the file instead"}
+		}
+		return fn(dom)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return h.getZone(r)
+}
+
+func (h *Handler) putZone(r *http.Request) (any, error) {
 	var req zoneWrite
 	if err := decode(r, &req); err != nil {
 		return nil, err
 	}
-	lines, err := recordLines(origin, req.Records)
+	origin := originFromID(r.PathValue("zone"))
+	records, err := recordTexts(origin, req.Records)
 	if err != nil {
 		return nil, err
 	}
-	err = h.mgr.Update(func(cfg *config.Config) error {
-		d, err := editableDomain(cfg, origin)
-		if err != nil {
-			return err
-		}
+	return h.updateZone(r, func(dom *config.DomainSpec) error {
 		if req.Kind != "" {
-			if d.Kind, err = normalizeKind(req.Kind); err != nil {
+			kind, err := normalizeKind(req.Kind)
+			if err != nil {
 				return err
 			}
+			dom.Kind = kind
 		}
-		d.Records = lines
+		dom.Records = lines(records)
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return h.getZone(r)
 }
 
 func (h *Handler) addRecord(r *http.Request) (any, error) {
-	origin := originFromID(r.PathValue("zone"))
 	var rec recordBody
 	if err := decode(r, &rec); err != nil {
 		return nil, err
 	}
-	lines, err := recordLines(origin, []recordBody{rec})
+	records, err := recordTexts(originFromID(r.PathValue("zone")), []recordBody{rec})
 	if err != nil {
 		return nil, err
 	}
-	err = h.mgr.Update(func(cfg *config.Config) error {
-		d, err := editableDomain(cfg, origin)
+	return h.updateZone(r, func(dom *config.DomainSpec) error {
+		dom.Records = append(dom.Records, records[0].String())
+		return nil
+	})
+}
+
+func (h *Handler) putRecord(r *http.Request) (any, error) {
+	var rec recordBody
+	if err := decode(r, &rec); err != nil {
+		return nil, err
+	}
+	origin := originFromID(r.PathValue("zone"))
+	records, err := recordTexts(origin, []recordBody{rec})
+	if err != nil {
+		return nil, err
+	}
+	return h.updateZone(r, func(dom *config.DomainSpec) error {
+		i, err := findRecord(origin, dom, r.PathValue("id"))
 		if err != nil {
 			return err
 		}
-		d.Records = append(d.Records, lines...)
+		dom.Records[i] = records[0].String()
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return h.getZone(r)
 }
 
-func editableDomain(cfg *config.Config, origin string) (*config.DomainSpec, error) {
-	i := findDomain(cfg, origin)
-	if i < 0 {
-		return nil, &NotFoundError{"zone " + displayOrigin(origin)}
+func (h *Handler) deleteRecord(r *http.Request) (any, error) {
+	origin := originFromID(r.PathValue("zone"))
+	return h.updateZone(r, func(dom *config.DomainSpec) error {
+		i, err := findRecord(origin, dom, r.PathValue("id"))
+		if err != nil {
+			return err
+		}
+		dom.Records = append(dom.Records[:i], dom.Records[i+1:]...)
+		return nil
+	})
+}
+
+// findRecord locates the stored line whose canonical form has id.
+func findRecord(origin string, dom *config.DomainSpec, id string) (int, error) {
+	for i, line := range dom.Records {
+		if rt, err := zone.ParseRecordText(displayOrigin(origin), line); err == nil && rt.ID() == id {
+			return i, nil
+		}
 	}
-	d := &cfg.Domains[i]
-	if d.ZoneFile != "" || d.HostsFile != "" {
-		return nil, &conflictError{"zone " + displayOrigin(origin) + " is loaded from a file; edit the file instead"}
-	}
-	return d, nil
+	return -1, &NotFoundError{"record " + id}
 }
 
 func (h *Handler) deleteZone(r *http.Request) (any, error) {
 	origin := originFromID(r.PathValue("zone"))
-	return nil, h.mgr.Update(func(cfg *config.Config) error {
-		i := findDomain(cfg, origin)
+	return nil, h.mgr.Update(r.Context(), func(d *config.Data) error {
+		i := findDomain(d, origin)
 		if i < 0 {
 			return &NotFoundError{"zone " + displayOrigin(origin)}
 		}
-		cfg.Domains = append(cfg.Domains[:i], cfg.Domains[i+1:]...)
+		d.Domains = append(d.Domains[:i], d.Domains[i+1:]...)
 		return nil
 	})
 }
@@ -697,16 +729,16 @@ func (h *Handler) getFilters(r *http.Request) (any, error) {
 	if err := h.requireFilters(); err != nil {
 		return nil, err
 	}
-	cfg := h.mgr.Config()
+	d := h.mgr.Data()
 	status := map[string]filter.SourceStatus{}
 	for _, s := range h.mgr.Service().Subscriptions.Status() {
 		status[s.Name] = s
 	}
-	out := filtersBody{BlockMode: cfg.Filters.BlockMode, Rules: cfg.Filters.Rules, Lists: []listBody{}}
+	out := filtersBody{BlockMode: d.Filters.BlockMode, Rules: d.Filters.Rules, Lists: []listBody{}}
 	if out.Rules == nil {
 		out.Rules = []string{}
 	}
-	for _, l := range cfg.Filters.Lists {
+	for _, l := range d.Filters.Lists {
 		b := listBody{Name: l.Name, Kind: l.Kind, URL: l.URL, File: l.File, Enabled: l.IsEnabled()}
 		if l.Refresh != 0 {
 			b.Refresh = l.Refresh.Duration().String()
@@ -769,8 +801,8 @@ func (h *Handler) putRules(r *http.Request) (any, error) {
 	if len(errs) > 0 {
 		return nil, &rulesError{errs}
 	}
-	err := h.mgr.Update(func(cfg *config.Config) error {
-		cfg.Filters.Rules = rules
+	err := h.mgr.Update(r.Context(), func(d *config.Data) error {
+		d.Filters.Rules = rules
 		return nil
 	})
 	if err != nil {
@@ -795,8 +827,8 @@ func (h *Handler) putBlockMode(r *http.Request) (any, error) {
 	if _, err := engine.ParseBlockMode(req.BlockMode); err != nil || req.BlockMode == "" {
 		return nil, badRequest("block_mode %q invalid (want zero_ip, nxdomain, or refused)", req.BlockMode)
 	}
-	return req, h.mgr.Update(func(cfg *config.Config) error {
-		cfg.Filters.BlockMode = req.BlockMode
+	return req, h.mgr.Update(r.Context(), func(d *config.Data) error {
+		d.Filters.BlockMode = req.BlockMode
 		return nil
 	})
 }
@@ -828,8 +860,8 @@ func (l listWrite) spec(name string) (config.ListSpec, error) {
 	return spec, nil
 }
 
-func findList(cfg *config.Config, name string) int {
-	for i, l := range cfg.Filters.Lists {
+func findList(d *config.Data, name string) int {
+	for i, l := range d.Filters.Lists {
 		if l.Name == name {
 			return i
 		}
@@ -849,11 +881,11 @@ func (h *Handler) createList(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = h.mgr.Update(func(cfg *config.Config) error {
-		if findList(cfg, spec.Name) >= 0 {
+	err = h.mgr.Update(r.Context(), func(d *config.Data) error {
+		if findList(d, spec.Name) >= 0 {
 			return &conflictError{"list " + spec.Name + " already exists"}
 		}
-		cfg.Filters.Lists = append(cfg.Filters.Lists, spec)
+		d.Filters.Lists = append(d.Filters.Lists, spec)
 		return nil
 	})
 	if err != nil {
@@ -878,12 +910,12 @@ func (h *Handler) putList(r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = h.mgr.Update(func(cfg *config.Config) error {
-		i := findList(cfg, name)
+	err = h.mgr.Update(r.Context(), func(d *config.Data) error {
+		i := findList(d, name)
 		if i < 0 {
 			return &NotFoundError{"list " + name}
 		}
-		cfg.Filters.Lists[i] = spec
+		d.Filters.Lists[i] = spec
 		return nil
 	})
 	if err != nil {
@@ -897,12 +929,12 @@ func (h *Handler) deleteList(r *http.Request) (any, error) {
 		return nil, err
 	}
 	name := r.PathValue("name")
-	return nil, h.mgr.Update(func(cfg *config.Config) error {
-		i := findList(cfg, name)
+	return nil, h.mgr.Update(r.Context(), func(d *config.Data) error {
+		i := findList(d, name)
 		if i < 0 {
 			return &NotFoundError{"list " + name}
 		}
-		cfg.Filters.Lists = append(cfg.Filters.Lists[:i], cfg.Filters.Lists[i+1:]...)
+		d.Filters.Lists = append(d.Filters.Lists[:i], d.Filters.Lists[i+1:]...)
 		return nil
 	})
 }
@@ -912,7 +944,7 @@ func (h *Handler) refreshList(r *http.Request) (any, error) {
 		return nil, err
 	}
 	name := r.PathValue("name")
-	if findList(h.mgr.Config(), name) < 0 {
+	if d := h.mgr.Data(); findList(&d, name) < 0 {
 		return nil, &NotFoundError{"list " + name}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
@@ -941,7 +973,7 @@ type clientBody struct {
 }
 
 func (h *Handler) getAccess(r *http.Request) (any, error) {
-	spec := h.mgr.Config().Access
+	spec := h.mgr.Data().Access
 	out := accessBody{Allow: spec.Allow, Deny: nonNil(spec.Deny), DenyAction: spec.DenyAction, Clients: []clientBody{}}
 	if out.DenyAction == "" {
 		out.DenyAction = "refuse"
@@ -961,8 +993,8 @@ func (h *Handler) putAccess(r *http.Request) (any, error) {
 	for _, c := range req.Clients {
 		spec.Clients = append(spec.Clients, config.ClientSpec{Name: strings.TrimSpace(c.Name), IDs: c.IDs, Networks: c.Networks})
 	}
-	err := h.mgr.Update(func(cfg *config.Config) error {
-		cfg.Access = spec
+	err := h.mgr.Update(r.Context(), func(d *config.Data) error {
+		d.Access = spec
 		return nil
 	})
 	if err != nil {

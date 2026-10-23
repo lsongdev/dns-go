@@ -20,7 +20,8 @@ go vet ./...
 | `engine` | 完整请求路径：EDNS/BADVERS/AD、权威与转发、transparent+CNAME 追踪、过滤在缓存前、真实 UDP 截断、QueryEvent、Service 热加载 |
 | `config` | 默认值与各类校验错误、Save/Clone 往返 |
 | `access` | 判断顺序、ID 校验、规则拷贝、并发 |
-| `api` | 鉴权、zone/记录/过滤/访问控制的增删改与持久化、解析测试、统计与查询日志 |
+| `store` | 两种后端的统一契约（往返、失败回滚、清空）、配置文件保留注释与权限、SQLite 初始化与表结构约束 |
+| `api` | 鉴权、zone/记录/过滤/访问控制的增删改与持久化（配置文件和 SQLite 各跑一遍）、解析测试、统计与查询日志 |
 | `web` | 嵌入的面板文件齐全，所有相对 import 都能解析到文件 |
 
 ## 端到端冒烟测试

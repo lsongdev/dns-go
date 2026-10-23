@@ -9,12 +9,12 @@ import { Access } from './pages/access.js';
 import { Tools } from './pages/tools.js';
 
 const PAGES = [
-  { id: 'dashboard', label: 'Dashboard', icon: '◔', component: Dashboard },
-  { id: 'querylog', label: 'Query log', icon: '≡', component: QueryLog },
-  { id: 'zones', label: 'Zones', icon: '◇', component: Zones },
-  { id: 'filters', label: 'Filters', icon: '⊘', component: Filters, forwardingOnly: true },
-  { id: 'access', label: 'Clients', icon: '◎', component: Access },
-  { id: 'tools', label: 'Tools', icon: '⚙', component: Tools },
+  { id: 'dashboard', label: 'Dashboard', component: Dashboard },
+  { id: 'querylog', label: 'Query log', component: QueryLog },
+  { id: 'zones', label: 'Zones', component: Zones },
+  { id: 'filters', label: 'Filters', component: Filters, forwardingOnly: true },
+  { id: 'access', label: 'Clients', component: Access },
+  { id: 'tools', label: 'Tools', component: Tools },
 ];
 
 // Routes look like #/zones/home.lan → { page: 'zones', rest: 'home.lan' }.
@@ -38,7 +38,6 @@ function App() {
   const [status, setStatus] = useState(null);
   const [error, setError] = useState(null);
   const [needLogin, setNeedLogin] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
 
   const loadStatus = async () => {
     try {
@@ -56,7 +55,6 @@ function App() {
     const timer = setInterval(() => document.hidden || loadStatus(), 15000);
     return () => clearInterval(timer);
   }, []);
-  useEffect(() => setMenuOpen(false), [route.page, route.rest]);
 
   if (needLogin) return html`<${Login} onLogin=${loadStatus} />`;
   if (!status) return html`<div class="boot">${error ? html`<${ErrorBox} error=${error} />` : html`<${Loading} />`}</div>`;
@@ -66,27 +64,23 @@ function App() {
   const Page = page.component;
   return html`
     <div class="layout">
-      <aside class=${`sidebar${menuOpen ? ' open' : ''}`}>
-        <div class="brand">
-          <span class="logo" aria-hidden="true">◆</span>
-          <span>dns-go</span>
-          <button class="icon menu" aria-label="Menu" aria-expanded=${menuOpen} onClick=${() => setMenuOpen(!menuOpen)}>☰</button>
+      <header class="topbar">
+        <div class="topbar-inner">
+          <a class="brand" href="#/dashboard"><span class="logo" aria-hidden="true">◆</span>dns-go</a>
+          <nav aria-label="Sections">
+            ${pages.map((p) => html`
+              <a href=${`#/${p.id}`} class=${p.id === page.id ? 'active' : ''} aria-current=${p.id === page.id ? 'page' : undefined}>${p.label}</a>`)}
+          </nav>
+          <div class="topbar-meta">
+            <span class=${`badge mode-${status.mode}`} title=${`Data stored in ${status.storage}`}>${status.mode} · ${status.storage}</span>
+            ${getToken() && html`<button class="link small" onClick=${() => { setToken(''); setNeedLogin(true); }}>Sign out</button>`}
+          </div>
         </div>
-        <nav>
-          ${pages.map((p) => html`
-            <a href=${`#/${p.id}`} class=${p.id === page.id ? 'active' : ''} aria-current=${p.id === page.id ? 'page' : undefined}>
-              <span class="nav-icon" aria-hidden="true">${p.icon}</span>${p.label}
-            </a>`)}
-        </nav>
-        <footer class="sidebar-foot">
-          <div><span class=${`badge mode-${status.mode}`}>${status.mode}</span></div>
-          <div class="muted small">${status.version}</div>
-          ${getToken() && html`<button class="link small" onClick=${() => { setToken(''); setNeedLogin(true); }}>Sign out</button>`}
-        </footer>
-      </aside>
+      </header>
       <main>
         ${error && html`<${ErrorBox} error=${error} />`}
         <${Page} key=${page.id} status=${status} route=${route.rest} />
+        <footer class="page-foot muted small">dns-go ${status.version}</footer>
       </main>
     </div>`;
 }

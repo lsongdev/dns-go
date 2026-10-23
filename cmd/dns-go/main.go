@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"flag"
@@ -21,6 +22,7 @@ import (
 	"github.com/lsongdev/dns-go/engine"
 	"github.com/lsongdev/dns-go/filter"
 	"github.com/lsongdev/dns-go/server"
+	"github.com/lsongdev/dns-go/store"
 	"github.com/lsongdev/dns-go/web"
 )
 
@@ -48,7 +50,22 @@ func main() {
 		log.Fatalf("engine: %v", err)
 	}
 	defer svc.Close()
-	mgr := api.NewManager(*cfgPath, cfg, svc)
+
+	opened, err := store.Open(cfg, *cfgPath)
+	if err != nil {
+		log.Fatalf("storage: %v", err)
+	}
+	defer opened.Store.Close()
+	switch {
+	case opened.Seeded:
+		log.Printf("storage: created %s from the config file's data sections", cfg.Storage.Path)
+	case cfg.Storage.Type == config.StorageSQLite && hasData(cfg.Data):
+		log.Printf("storage: %s is authoritative; domains/filters/access in %s are ignored", cfg.Storage.Path, *cfgPath)
+	}
+	mgr, err := api.NewManager(context.Background(), cfg, opened.Store, svc)
+	if err != nil {
+		log.Fatalf("data: %v", err)
+	}
 
 	certs := &certStore{}
 	listeners := make([]io.Closer, 0, len(cfg.Listens))
@@ -70,7 +87,7 @@ func main() {
 		listeners = append(listeners, closer)
 		go func() { errCh <- serve() }()
 	}
-	log.Printf("mode %s: %d zone(s)", cfg.Mode, len(svc.Zones.List()))
+	log.Printf("mode %s, storage %s: %d zone(s)", cfg.Mode, cfg.Storage.Type, len(svc.Zones.List()))
 	warnOpenResolver(cfg, svc)
 
 	sigCh := make(chan os.Signal, 1)
@@ -93,6 +110,10 @@ func main() {
 			return
 		}
 	}
+}
+
+func hasData(d config.Data) bool {
+	return len(d.Domains) > 0 || len(d.Filters.Lists) > 0 || len(d.Filters.Rules) > 0 || len(d.Access.Clients) > 0 || d.Access.Allow != nil
 }
 
 // warnOpenResolver flags a forwarding resolver that answers anyone on a
@@ -119,7 +140,7 @@ func warnOpenResolver(cfg *config.Config, svc *engine.Service) {
 // reload re-reads the config and certificates. Failures keep the running
 // state, so a typo in the file never takes the server down.
 func reload(mgr *api.Manager, certs *certStore) {
-	if err := mgr.Reload(); err != nil {
+	if err := mgr.Reload(context.Background()); err != nil {
 		log.Printf("reload: %v", err)
 		return
 	}

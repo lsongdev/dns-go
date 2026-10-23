@@ -41,7 +41,7 @@ function ZoneList({ status }) {
                 <tr class="link" onClick=${() => { location.hash = `#/zones/${encodeURIComponent(z.id)}`; }}>
                   <td><a href=${`#/zones/${encodeURIComponent(z.id)}`}><strong>${z.origin}</strong></a></td>
                   <td><span class=${`badge kind-${z.kind}`}>${z.kind}</span></td>
-                  <td>${z.source === 'records' ? 'panel / config' : html`<span title=${z.path}>${z.source.replace('_', ' ')}</span>`}</td>
+                  <td>${z.source === 'records' ? 'managed' : html`<span title=${z.path}>${z.source.replace('_', ' ')} (read-only)</span>`}</td>
                   <td class="num">${fmtNumber(z.records)}</td>
                 </tr>`)}
             </tbody>
@@ -90,21 +90,20 @@ function CreateZone({ status, onClose }) {
 function ZoneDetail({ id, status }) {
   const zone = useApi(`/zones/${encodeURIComponent(id)}`);
   const action = useAction();
-  const [editing, setEditing] = useState(null); // { index, record } ; index -1 = new
+  const [editing, setEditing] = useState(null); // { id, record }; id is empty for a new record
   const z = zone.data;
 
-  const save = async (records, kind = z.kind) => {
-    const updated = await action.run(() => api('PUT', `/zones/${encodeURIComponent(id)}`, { kind, records }));
-    zone.setData(updated);
-  };
+  const base = `/zones/${encodeURIComponent(id)}`;
+  const mutate = async (fn) => zone.setData(await action.run(fn));
+  const setKind = (kind) => mutate(() => api('PUT', base, { kind, records: z.record_list })).catch(() => {});
   const saveRecord = async (record) => {
-    const records = [...z.record_list];
-    if (editing.index < 0) records.push(record);
-    else records[editing.index] = record;
-    await save(records);
+    const { id: rid, ...body } = record;
+    await mutate(() => (editing.id
+      ? api('PUT', `${base}/records/${editing.id}`, body)
+      : api('POST', `${base}/records`, body)));
     setEditing(null);
   };
-  const remove = (index) => save(z.record_list.filter((_, i) => i !== index)).catch(() => {});
+  const remove = (r) => mutate(() => api('DELETE', `${base}/records/${r.id}`)).catch(() => {});
   const removeZone = async () => {
     if (!confirm(`Delete zone ${z.origin} and all its records?`)) return;
     await action.run(() => api('DELETE', `/zones/${encodeURIComponent(id)}`)).catch(() => null);
@@ -125,10 +124,10 @@ function ZoneDetail({ id, status }) {
         </div>
         ${z.editable && html`<div class="btn-row">
           ${status.mode === 'forwarding' && html`
-            <select value=${z.kind} onChange=${(e) => save(z.record_list, e.target.value).catch(() => {})} aria-label="Zone kind">
+            <select value=${z.kind} onChange=${(e) => setKind(e.target.value)} aria-label="Zone kind">
               <option value="static">static</option><option value="transparent">transparent</option>
             </select>`}
-          <button class="primary" onClick=${() => setEditing({ index: -1, record: { name: '', ttl: 300, type: 'A', data: '' } })}>Add record</button>
+          <button class="primary" onClick=${() => setEditing({ id: '', record: { name: '', ttl: 300, type: 'A', data: '' } })}>Add record</button>
           <button class="danger" onClick=${removeZone}>Delete zone</button>
         </div>`}
       </header>
@@ -138,21 +137,21 @@ function ZoneDetail({ id, status }) {
           <table class="table records">
             <thead><tr><th>Name</th><th>Type</th><th class="num">TTL</th><th>Data</th>${z.editable && html`<th></th>`}</tr></thead>
             <tbody>
-              ${z.record_list.map((r, i) => html`
-                <tr>
+              ${z.record_list.map((r) => html`
+                <tr key=${r.id}>
                   <td class="mono">${r.name}</td>
                   <td><span class="badge">${r.type}</span></td>
                   <td class="num muted">${r.ttl}</td>
                   <td class="mono data">${r.data}</td>
                   ${z.editable && html`<td class="actions nowrap">
-                    <button class="small" onClick=${() => setEditing({ index: i, record: { ...r } })}>Edit</button>
-                    <button class="small danger" disabled=${action.busy} onClick=${() => remove(i)}>Delete</button>
+                    <button class="small" onClick=${() => setEditing({ id: r.id, record: { ...r } })}>Edit</button>
+                    <button class="small danger" disabled=${action.busy} onClick=${() => remove(r)}>Delete</button>
                   </td>`}
                 </tr>`)}
             </tbody>
           </table>
         </div>`}
-      ${editing && html`<${RecordForm} origin=${z.origin} initial=${editing.record} isNew=${editing.index < 0}
+      ${editing && html`<${RecordForm} origin=${z.origin} initial=${editing.record} isNew=${!editing.id}
           busy=${action.busy} error=${action.error} onSave=${(r) => saveRecord(r).catch(() => {})}
           onClose=${() => { setEditing(null); action.setError(null); }} />`}
     </section>`;

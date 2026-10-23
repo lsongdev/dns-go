@@ -64,7 +64,6 @@ domains:
 
 filters:
   block_mode: zero_ip # zero_ip | nxdomain | refused
-  cache_dir: ./data/filters
   lists:
     - name: adguard-dns
       url: "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt"
@@ -90,6 +89,15 @@ access:
       ids: [replace-with-a-random-secret]
     - name: living-room-tv
       networks: [192.168.1.50]
+
+# Downloaded filter lists, and the database when storage is sqlite.
+data_dir: ./data
+
+# Where domains/filters/access live at runtime. "config" (default) keeps them
+# in this file; "sqlite" keeps them in <data_dir>/dns-go.db, seeded once from
+# the sections above. Either way the panel and API edit them the same way.
+# storage:
+#   type: sqlite
 
 # Management API (/api) and web panel (/). A non-loopback addr needs a token.
 api:

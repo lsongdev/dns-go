@@ -26,6 +26,12 @@ upstreams:                  # 仅转发模式，按顺序尝试；出错或返�
     method: post            # doh：get | post（默认 post）
     timeout: 5s             # 默认 5s
 
+data_dir: ./data            # 已下载的过滤列表（重启后无需联网即可生效）；sqlite 数据库的默认位置
+
+storage:                    # domains / filters / access 这三部分数据存放在哪里
+  type: config              # config（默认，存在本配置文件中）| sqlite
+  # path: ./data/dns-go.db  # sqlite 数据库路径，默认为 <data_dir>/dns-go.db
+
 cache:                      # 仅转发模式
   enabled: true
   min_ttl: 0s               # 正向应答的最短缓存时间（默认 0，不改变上游 TTL）
@@ -43,7 +49,6 @@ domains:
 
 filters:                    # 仅转发模式
   block_mode: zero_ip       # zero_ip（A→0.0.0.0、AAAA→::、其它类型 NODATA）| nxdomain | refused
-  cache_dir: ./data/filters # 保存已下载的列表，重启后不需要联网就能立即生效
   lists:
     - name: adguard-dns
       url: https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt
@@ -73,9 +78,22 @@ access:                     # 网络项可以写 CIDR、单个地址或关键字
 优先级为 `$important` > 例外 > 拦截。元素隐藏、正则、通配符和其它修饰符会被跳过并计数。
 hosts 格式（`0.0.0.0 name`）不属于过滤器，请用 `domains[].hosts_file`。
 
+## 数据存储
+
+配置分为两部分：
+
+- **进程设置**：mode、listens、upstreams、cache、api、data_dir、storage。只从配置文件读取，修改后需要重启。
+- **运行数据**：domains、filters、access。可以通过 Web 面板和 API 在线修改，存放位置由 `storage` 决定：
+  - `config`（默认）：数据就存放在这个配置文件中。通过 API 修改时只会改写这三段，其它段落和注释保持原样；手工编辑后执行 `kill -HUP` 即可生效。
+  - `sqlite`：数据存放在数据库中（`zones`、`records`、`filter_lists`、`filter_rules`、`clients`、`client_ids`、`client_networks`、`settings` 这几张表）。
+    首次启动时，会用配置文件中的这三段初始化数据库；之后以数据库为准，配置文件里的这三段会被忽略，启动时会打印提示。
+    数据库文件的权限为 0600，因为客户端 ID 属于密钥。备份时复制 `dns-go.db` 即可（建议先停服务，或使用 `sqlite3 .backup`）。
+
+解析引擎只接收一份数据，并不知道它来自文件还是数据库。以后增加 PostgreSQL 等后端，只需要实现 `store.Store` 接口。
+
 ## 热加载
 
-`kill -HUP <pid>` 会重新读取配置文件，并应用 domains、access、filters（列表、规则、block_mode）以及 TLS 证书。
+`kill -HUP <pid>` 会从存储中重新加载运行数据（`config` 存储即重新读取配置文件），重新读取由文件加载的 zone，并重新加载 TLS 证书。
 新配置无效时会记录日志并继续使用旧配置。`mode`、`listens`、`upstreams` 和 cache 容量的修改需要重启。
 
 ## 访问控制

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -69,7 +70,6 @@ func TestValidateErrors(t *testing.T) {
 		"list reserved name":  listens + upstream + "filters: {lists: [{name: rules, url: x}]}",
 		"list duplicate":      listens + upstream + "filters: {lists: [{name: a, url: x}, {name: a, url: y}]}",
 		"list bad kind":       listens + upstream + "filters: {lists: [{name: a, url: x, kind: deny}]}",
-		"auth no domains":     listens + "mode: authoritative",
 		"auth with upstreams": listens + upstream + "mode: authoritative\ndomains: [{domain: a.com, records: [x]}]",
 		"auth with cache":     listens + "mode: authoritative\ncache: {enabled: true}\ndomains: [{domain: a.com, records: [x]}]",
 		"auth with filters":   listens + "mode: authoritative\nfilters: {rules: [x]}\ndomains: [{domain: a.com, records: [x]}]",
@@ -153,32 +153,27 @@ func TestAPIValidation(t *testing.T) {
 	}
 }
 
-func TestSaveAndClone(t *testing.T) {
+func TestDataCloneAndStorageDefaults(t *testing.T) {
 	cfg, err := Parse([]byte(listens + `
 upstreams: [{type: udp, addr: "1.1.1.1:53", timeout: 3s}]
 domains: [{domain: home.lan}]
-cache: {enabled: true, max_ttl: 1h}
+storage: {type: sqlite}
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
-	clone := cfg.Clone()
+	clone := cfg.Data.Clone()
 	clone.Domains[0].Records = append(clone.Domains[0].Records, "x IN A 192.0.2.1")
 	if len(cfg.Domains[0].Records) != 0 {
 		t.Fatal("Clone shares slices")
 	}
-	path := t.TempDir() + "/c.yaml"
-	if err := clone.Save(path); err != nil {
-		t.Fatal(err)
+	if cfg.DataDir != "data" || cfg.Storage.Path != filepath.Join("data", "dns-go.db") {
+		t.Fatalf("storage defaults: %q %+v", cfg.DataDir, cfg.Storage)
 	}
-	loaded, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := Parse([]byte(listens + "upstreams: [{type: udp, addr: x}]\nstorage: {type: mysql}")); err == nil {
+		t.Fatal("unknown storage type accepted")
 	}
-	if loaded.Access.Allow != nil {
-		t.Fatal("omitted allow must stay omitted after Save")
-	}
-	if loaded.Domains[0].Records[0] != "x IN A 192.0.2.1" || loaded.Upstreams[0].Timeout.Duration() != 3*time.Second || loaded.Cache.MaxTTL.Duration() != time.Hour {
-		t.Fatalf("round trip lost data: %+v", loaded)
+	if _, err := Parse([]byte(listens + "mode: authoritative")); err != nil {
+		t.Fatalf("authoritative mode may start without zones (they can live in a database): %v", err)
 	}
 }
