@@ -1,3 +1,5 @@
+//go:build !nosqlite && !mips && !mipsle && !mips64 && !mips64le
+
 package store
 
 import (
@@ -17,6 +19,9 @@ import (
 	"github.com/lsongdev/dns-go/config"
 	"github.com/lsongdev/dns-go/zone"
 )
+
+// SQLiteAvailable reports whether this binary includes the SQLite backend.
+const SQLiteAvailable = true
 
 const schemaVersion = 1
 

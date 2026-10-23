@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"sync"
 	"syscall"
 	"time"
@@ -26,10 +27,18 @@ import (
 	"github.com/lsongdev/dns-go/web"
 )
 
+// version is set at build time: -ldflags "-X main.version=v1.2.3".
+var version string
+
 func main() {
 	cfgPath := flag.String("config", "config.yaml", "path to config file")
 	logQueries := flag.Bool("log-queries", false, "log every answered query")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(versionString())
+		return
+	}
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
@@ -112,6 +121,16 @@ func main() {
 	}
 }
 
+func versionString() string {
+	if version != "" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		return info.Main.Version
+	}
+	return "devel"
+}
+
 func hasData(d config.Data) bool {
 	return len(d.Domains) > 0 || len(d.Filters.Lists) > 0 || len(d.Filters.Rules) > 0 || len(d.Access.Clients) > 0 || d.Access.Allow != nil
 }
@@ -168,7 +187,7 @@ func listenAPI(spec config.APISpec, mgr *api.Manager, stats *api.Stats, certs *c
 		scheme = "https"
 	}
 	srv := &http.Server{
-		Handler:           api.NewHandler(mgr, stats, api.Options{Token: spec.Token, Panel: web.FS()}),
+		Handler:           api.NewHandler(mgr, stats, api.Options{Token: spec.Token, Panel: web.FS(), Version: version}),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}

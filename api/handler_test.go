@@ -46,7 +46,12 @@ domains:
 // the same whichever one holds the data.
 func forEachStore(t *testing.T, fn func(t *testing.T, f *fixture)) {
 	for _, storage := range []string{config.StorageConfig, config.StorageSQLite} {
-		t.Run(storage, func(t *testing.T) { fn(t, newFixtureWith(t, "", storage)) })
+		t.Run(storage, func(t *testing.T) {
+			if storage == config.StorageSQLite && !store.SQLiteAvailable {
+				t.Skip("built without SQLite")
+			}
+			fn(t, newFixtureWith(t, "", storage))
+		})
 	}
 }
 

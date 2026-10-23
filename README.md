@@ -16,6 +16,21 @@
 
 依赖只有标准库和 `gopkg.in/yaml.v3`（面板使用随附的 Preact + htm，无构建步骤）。
 
+## 构建
+
+```bash
+make                 # 当前平台，生成 dist/dns-go
+make test            # go vet（包括 nosqlite 构建）+ go test -race
+make release         # 全部平台：dist/*.tar.gz、*.zip 和 SHA256SUMS
+make release PLATFORMS="linux/arm64 linux/mipsle"
+make linux/arm/v7    # 只构建单个平台，输出为 dist/ 下的目录
+```
+
+平台包括 linux（amd64、arm64、armv6/v7、386、riscv64、loong64、mips/mipsle）、darwin、windows 和 freebsd。
+所有二进制都是静态链接，面板已经嵌入，无需其它文件。MIPS 默认使用 softfloat，适配多数路由器。
+纯 Go 的 SQLite 驱动不支持 MIPS，所以 MIPS 版本只能使用配置文件存储；需要更小的二进制时，也可以用 `TAGS=nosqlite` 去掉 SQLite 支持。
+Linux 的发布包中附带 systemd unit（`contrib/systemd/dns-go.service`），其中已配置最小权限：只有绑定低端口的能力，并启用了沙箱。
+
 ## 快速开始
 
 ```bash

@@ -1,0 +1,51 @@
+# systemd unit for dns-go. Install:
+#   useradd --system --no-create-home --shell /usr/sbin/nologin dns-go
+#   install -m 0755 dns-go /usr/local/bin/dns-go
+#   install -d -m 0750 -o root -g dns-go /etc/dns-go   # config.yaml: 0640 root:dns-go
+#   install -m 0644 dns-go.service /etc/systemd/system/ && systemctl enable --now dns-go
+# With storage.type "config", the API rewrites config.yaml: make /etc/dns-go
+# writable by dns-go and add it to ReadWritePaths. With "sqlite" (recommended
+# here) the config stays read-only and data lives in /var/lib/dns-go.
+[Unit]
+Description=dns-go DNS server
+Documentation=https://github.com/lsongdev/dns-go
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/dns-go -config /etc/dns-go/config.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+User=dns-go
+Group=dns-go
+StateDirectory=dns-go
+StateDirectoryMode=0750
+WorkingDirectory=/var/lib/dns-go
+Restart=on-failure
+RestartSec=2s
+LimitNOFILE=65536
+
+# Port 53/853/443 without root, and nothing else.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target

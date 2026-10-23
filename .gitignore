@@ -11,3 +11,6 @@
 
 # downloaded filter lists (filters.cache_dir)
 data/
+
+# build output (make)
+/dist/

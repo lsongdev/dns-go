@@ -30,6 +30,8 @@ type Options struct {
 	// Panel holds the web panel's static files, served at "/". Nil serves
 	// only the API.
 	Panel fs.FS
+	// Version is reported by /api/status; empty uses the Go build info.
+	Version string
 }
 
 // Handler serves /api and the panel.
@@ -206,7 +208,10 @@ type cacheBody struct {
 	Entries int `json:"entries"`
 }
 
-func version() string {
+func (h *Handler) version() string {
+	if h.opts.Version != "" {
+		return h.opts.Version
+	}
 	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
 		return info.Main.Version
 	}
@@ -217,7 +222,7 @@ func (h *Handler) status(r *http.Request) (any, error) {
 	cfg, d := h.mgr.Settings(), h.mgr.Data()
 	svc := h.mgr.Service()
 	out := statusBody{
-		Version: version(),
+		Version: h.version(),
 		Mode:    cfg.Mode,
 		Storage: cfg.Storage.Type,
 		Uptime:  int64(time.Since(h.started).Seconds()),
