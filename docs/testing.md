@@ -18,7 +18,10 @@ go vet ./...
 | `server` | UDP 大小上限、TCP 分帧/管线/空闲超时、关闭监听即返回、DoH GET/POST/Cache-Control |
 | `proxy` | failover（错误与 SERVFAIL/REFUSED）、context 取消 |
 | `engine` | 完整请求路径：EDNS/BADVERS/AD、权威与转发、transparent+CNAME 追踪、过滤在缓存前、真实 UDP 截断、QueryEvent、Service 热加载 |
-| `config` | 默认值与各类校验错误 |
+| `config` | 默认值与各类校验错误、Save/Clone 往返 |
+| `access` | 判断顺序、ID 校验、规则拷贝、并发 |
+| `api` | 鉴权、zone/记录/过滤/访问控制的增删改与持久化、解析测试、统计与查询日志 |
+| `web` | 嵌入的面板文件齐全，所有相对 import 都能解析到文件 |
 
 ## 端到端冒烟测试
 
@@ -39,6 +42,21 @@ mkdir -p testdata/blocklists
 curl -sSL -o testdata/blocklists/adguard-dns.txt \
   https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt
 ```
+
+## Web 面板端到端测试
+
+`scripts/panel-e2e.mjs` 通过 DevTools 协议驱动无头 Chrome，走一遍面板的主要操作：建 zone、加/改/删记录、
+校验错误提示、自定义规则逐行报错、检查域名、切换拦截方式、添加客户端、解析测试、从查询日志一键拦截。
+同时会收集页面上的 JS 异常，并把关键状态截图保存到输出目录。
+
+脚本会修改目标服务的配置，请只对一次性的实例运行（API 不设 token）：
+
+```bash
+./dns-go -config /tmp/throwaway.yaml &
+node scripts/panel-e2e.mjs http://127.0.0.1:8080 /tmp/panel-e2e
+```
+
+需要 Node 22 及以上版本和 Chrome（可以通过 `CHROME` 环境变量指定路径）。
 
 ## 手工验证
 

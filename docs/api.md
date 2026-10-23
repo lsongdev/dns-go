@@ -1,6 +1,8 @@
 # HTTP 管理 API
 
-在配置中启用后，API 位于 `/api`，Web 控制面板位于 `/`：
+在配置中启用后，API 位于 `/api`，Web 控制面板位于 `/`。
+面板是 `web/static` 下的 ES modules（Preact + htm，已随附在 `web/static/vendor`），通过 `embed` 编译进二进制，没有构建步骤。
+在开发时修改这些文件后需要重新编译。
 
 ```yaml
 api:

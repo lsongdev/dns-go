@@ -11,7 +11,10 @@
 
 各平台都可以直接接入，不需要安装客户端：macOS、Windows、Linux、iOS、Android、路由器以及浏览器都支持普通 DNS 或 DoH/DoT。
 
-依赖只有标准库和 `gopkg.in/yaml.v3`。
+内置 Web 控制面板与 HTTP API（`api.addr`），可以管理 zone 与记录、过滤规则与订阅、客户端与访问控制，
+并提供仪表盘、查询日志和解析测试。面板文件嵌入在二进制中，可以离线使用。
+
+依赖只有标准库和 `gopkg.in/yaml.v3`（面板使用随附的 Preact + htm，无构建步骤）。
 
 ## 快速开始
 
@@ -20,6 +23,7 @@ go build -o dns-go ./cmd/dns-go
 ./dns-go -config config.yaml                # 转发解析器
 ./dns-go -config config.authoritative.yaml  # 权威服务器
 ./dns-go -config config.yaml -log-queries   # 打印每条查询（来源、命中规则、客户端）
+open http://127.0.0.1:8080                  # Web 控制面板
 kill -HUP <pid>                             # 热加载 zone、访问控制、过滤列表和证书
 ```
 

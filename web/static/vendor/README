@@ -1,0 +1,4 @@
+Vendored ES modules (no build step):
+  preact.js  preact@10.29.8 dist/preact.module.js
+  hooks.js   preact@10.29.8 hooks/dist/hooks.module.js (import rewritten to ./preact.js)
+  htm.js     htm@3.1.1 dist/htm.module.js

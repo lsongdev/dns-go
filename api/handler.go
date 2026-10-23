@@ -514,8 +514,15 @@ func recordLines(origin string, records []recordBody) ([]string, error) {
 		}
 		line := fmt.Sprintf("%s %d IN %s %s", name, ttl, zone.TypeString(typ), data)
 		parsed, err := zone.ParseString(displayOrigin(origin), line)
-		if err != nil || len(parsed.Records) != 1 {
-			return nil, badRequest("records[%d] (%s): %v", i, line, err)
+		if err != nil {
+			msg := err.Error()
+			if _, rest, ok := strings.Cut(msg, ": "); ok && strings.HasPrefix(msg, "line ") {
+				msg = rest
+			}
+			return nil, badRequest("%s %s %s: %s", name, zone.TypeString(typ), data, msg)
+		}
+		if len(parsed.Records) != 1 {
+			return nil, badRequest("%s %s %s: expected exactly one record", name, zone.TypeString(typ), data)
 		}
 		// Store a canonical form: relative owner, normalized RDATA.
 		r := parsed.Records[0]
