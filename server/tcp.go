@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"time"
 
 	"github.com/lsongdev/dns-go/packet"
@@ -21,6 +22,9 @@ type TCPServer struct {
 	IdleTimeout time.Duration
 	// Transport labels requests; ListenTLS sets it to TransportDoT.
 	Transport Transport
+	// Hostname enables client IDs from TLS SNI: a client connecting to
+	// "{id}.<Hostname>" is identified as {id}. Needs a wildcard certificate.
+	Hostname string
 }
 
 // ListenTCP serves h over plain TCP on addr.
@@ -73,6 +77,16 @@ func (s *TCPServer) serveConn(conn net.Conn) {
 	if transport == "" {
 		transport = TransportTCP
 	}
+	var clientID string
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		if err := tlsConn.SetDeadline(time.Now().Add(idle)); err != nil {
+			return
+		}
+		if err := tlsConn.Handshake(); err != nil {
+			return
+		}
+		clientID = clientIDFromSNI(tlsConn.ConnectionState().ServerName, s.Hostname)
+	}
 	var length [2]byte
 	for {
 		if err := conn.SetReadDeadline(time.Now().Add(idle)); err != nil {
@@ -89,7 +103,7 @@ func (s *TCPServer) serveConn(conn net.Conn) {
 		if err != nil {
 			return // stream framing can no longer be trusted
 		}
-		w := &tcpWriter{conn: conn, transport: transport}
+		w := &tcpWriter{conn: conn, transport: transport, clientID: clientID}
 		s.Handler.ServeDNS(ctx, w, req)
 		if w.err != nil {
 			return
@@ -100,6 +114,7 @@ func (s *TCPServer) serveConn(conn net.Conn) {
 type tcpWriter struct {
 	conn      net.Conn
 	transport Transport
+	clientID  string
 	err       error
 }
 
@@ -116,5 +131,6 @@ func (w *tcpWriter) WriteMsg(res *packet.DNSPacket) error {
 	return w.err
 }
 
-func (w *tcpWriter) RemoteAddr() net.Addr { return w.conn.RemoteAddr() }
-func (w *tcpWriter) Transport() Transport { return w.transport }
+func (w *tcpWriter) RemoteAddr() netip.AddrPort { return addrPortOf(w.conn.RemoteAddr()) }
+func (w *tcpWriter) Transport() Transport       { return w.transport }
+func (w *tcpWriter) ClientID() string           { return w.clientID }

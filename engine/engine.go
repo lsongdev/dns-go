@@ -5,11 +5,13 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"math/rand/v2"
-	"net"
+	"net/netip"
 	"sync/atomic"
 	"time"
 
+	"github.com/lsongdev/dns-go/access"
 	"github.com/lsongdev/dns-go/cache"
 	"github.com/lsongdev/dns-go/client"
 	"github.com/lsongdev/dns-go/filter"
@@ -22,6 +24,7 @@ import (
 type Source string
 
 const (
+	SourceDenied   Source = "denied"   // refused or dropped by access control
 	SourceInvalid  Source = "invalid"  // rejected before resolution (FORMERR, NOTIMP, BADVERS, ...)
 	SourcePolicy   Source = "policy"   // refused by policy (zone transfer, out-of-zone)
 	SourceZone     Source = "zone"     // local zone data
@@ -51,10 +54,11 @@ const (
 // Options configures an Engine. A nil Upstream makes it an authoritative
 // server: no recursion is advertised and names outside zones are REFUSED.
 type Options struct {
-	Zones     *zone.Store    // required; may be empty
-	Filter    *filter.Filter // nil disables filtering
-	Cache     *cache.Cache   // nil disables caching
-	Upstream  client.Client  // nil: authoritative only
+	Zones     *zone.Store        // required; may be empty
+	Filter    *filter.Filter     // nil disables filtering
+	Cache     *cache.Cache       // nil disables caching
+	Upstream  client.Client      // nil: authoritative only
+	Access    *access.Controller // nil allows every client
 	BlockMode BlockMode
 	// UDPSize is advertised in OPT records. Zero means server.DefaultUDPSize.
 	UDPSize uint16
@@ -72,6 +76,7 @@ type Engine struct {
 	filter   *filter.Filter
 	cache    *cache.Cache
 	upstream client.Client
+	access   *access.Controller
 	udpSize  uint16
 	timeout  time.Duration
 	onQuery  func(QueryEvent)
@@ -85,6 +90,7 @@ func New(opts Options) *Engine {
 		filter:   opts.Filter,
 		cache:    opts.Cache,
 		upstream: opts.Upstream,
+		access:   opts.Access,
 		udpSize:  opts.UDPSize,
 		timeout:  opts.Timeout,
 		onQuery:  opts.OnQuery,
@@ -102,28 +108,31 @@ func New(opts Options) *Engine {
 	return e
 }
 
-func (e *Engine) Zones() *zone.Store     { return e.zones }
-func (e *Engine) Filter() *filter.Filter { return e.filter }
-func (e *Engine) Cache() *cache.Cache    { return e.cache }
-func (e *Engine) Recursive() bool        { return e.upstream != nil }
+func (e *Engine) Zones() *zone.Store         { return e.zones }
+func (e *Engine) Filter() *filter.Filter     { return e.filter }
+func (e *Engine) Cache() *cache.Cache        { return e.cache }
+func (e *Engine) Access() *access.Controller { return e.access }
+func (e *Engine) Recursive() bool            { return e.upstream != nil }
 
 func (e *Engine) BlockMode() BlockMode     { return BlockMode(e.blockMode.Load()) }
 func (e *Engine) SetBlockMode(m BlockMode) { e.blockMode.Store(uint32(m)) }
 
 // QueryEvent describes one answered query, for logging and statistics.
 type QueryEvent struct {
-	Time      time.Time
-	Duration  time.Duration
-	Client    net.Addr
-	Transport server.Transport
-	Name      string
-	Type      packet.DNSType
-	Class     packet.DNSClass
-	RCode     uint16
-	Answers   int
-	Source    Source
-	Filter    filter.Match // set when a filter rule matched (block or allow)
-	Err       error        // upstream error behind a SERVFAIL
+	Time       time.Time
+	Duration   time.Duration
+	Client     netip.AddrPort
+	ClientID   string // identifier presented over DoH/DoT, if any
+	ClientName string // access.Client name, when the client was identified
+	Transport  server.Transport
+	Name       string
+	Type       packet.DNSType
+	Class      packet.DNSClass
+	RCode      uint16
+	Answers    int
+	Source     Source
+	Filter     filter.Match // set when a filter rule matched (block or allow)
+	Err        error        // upstream error behind a SERVFAIL, or the access refusal reason
 }
 
 // Result is a complete reply plus how it was produced.
@@ -140,21 +149,39 @@ func (e *Engine) ServeDNS(ctx context.Context, w server.ResponseWriter, req *pac
 		return // never answer responses: avoids reflection loops
 	}
 	start := time.Now()
-	res := e.Resolve(ctx, req)
-	_ = w.WriteMsg(res.Msg)
+	var res Result
+	var clientName string
+	decision := access.Decision{Allowed: true}
+	if e.access != nil {
+		decision = e.access.Check(access.Request{Addr: w.RemoteAddr().Addr(), ClientID: w.ClientID()})
+		clientName = decision.Client
+	}
+	switch {
+	case decision.Allowed:
+		res = e.Resolve(ctx, req)
+		_ = w.WriteMsg(res.Msg)
+	case decision.Action == access.Drop && w.Transport() == server.TransportUDP:
+		res = Result{Msg: packet.NewReply(req), Source: SourceDenied, Err: errors.New(decision.Reason)}
+	default:
+		res = Result{Msg: packet.NewReply(req), Source: SourceDenied, Err: errors.New(decision.Reason)}
+		e.finalize(req, res.Msg, answer{rcode: packet.RCodeRefused})
+		_ = w.WriteMsg(res.Msg)
+	}
 	if e.onQuery == nil {
 		return
 	}
 	ev := QueryEvent{
-		Time:      start,
-		Duration:  time.Since(start),
-		Client:    w.RemoteAddr(),
-		Transport: w.Transport(),
-		RCode:     res.Msg.RCode(),
-		Answers:   len(res.Msg.Answers),
-		Source:    res.Source,
-		Filter:    res.Filter,
-		Err:       res.Err,
+		Time:       start,
+		Duration:   time.Since(start),
+		Client:     w.RemoteAddr(),
+		ClientID:   w.ClientID(),
+		ClientName: clientName,
+		Transport:  w.Transport(),
+		RCode:      res.Msg.RCode(),
+		Answers:    len(res.Msg.Answers),
+		Source:     res.Source,
+		Filter:     res.Filter,
+		Err:        res.Err,
 	}
 	if len(req.Questions) > 0 {
 		q := req.Questions[0]

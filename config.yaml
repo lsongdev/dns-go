@@ -1,6 +1,7 @@
-# Forwarding resolver for personal devices: local overrides, ad filtering,
-# caching, and encrypted upstreams. See config.authoritative.yaml for running
-# as a public name server.
+# Forwarding resolver: local zones and overrides, ad filtering, caching, and
+# encrypted upstreams. Fits a router or NAS on a LAN as well as a cloud host
+# serving your devices over DoH/DoT. See config.authoritative.yaml for
+# running as an authoritative name server.
 mode: forwarding
 
 listens:
@@ -12,11 +13,17 @@ listens:
   # plain HTTP for a TLS-terminating reverse proxy. Path: /dns-query
   - type: doh
     addr: ":8443"
-  # DoT (Android "Private DNS" uses this, port 853).
+  # DoT on 853. With hostname set, clients connecting to
+  # "<id>.dns.example.com" are identified as client <id> (wildcard cert).
   # - type: dot
   #   addr: ":853"
+  #   hostname: dns.example.com
   #   cert_file: /etc/letsencrypt/live/dns.example.com/fullchain.pem
   #   key_file: /etc/letsencrypt/live/dns.example.com/privkey.pem
+  # Behind nginx/Caddy, trust its X-Forwarded-For:
+  # - type: doh
+  #   addr: "127.0.0.1:8053"
+  #   trusted_proxies: [127.0.0.1]
 
 upstreams: # tried in order; SERVFAIL/REFUSED/errors fail over to the next
   - type: doh
@@ -69,3 +76,17 @@ filters:
     - "||doubleclick.net^"
     - "||google-analytics.com^"
     - "@@||example.com^"
+
+# Who may query. Without an allow list a forwarding resolver serves only
+# loopback and private networks, so it is never an open resolver by
+# accident. Devices outside those networks authenticate with a client ID:
+# DoH https://dns.example.com/dns-query/<id>, or DoT <id>.dns.example.com.
+access:
+  allow: [private]
+  # deny: [192.168.1.66]
+  deny_action: refuse # refuse | drop (no reply over UDP)
+  clients:
+    - name: laptop
+      ids: [replace-with-a-random-secret]
+    - name: living-room-tv
+      networks: [192.168.1.50]

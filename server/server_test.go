@@ -3,12 +3,19 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -177,7 +184,144 @@ func TestDoHHandlerThatDoesNotReply(t *testing.T) {
 	h := NewHTTPHandler(HandlerFunc(func(context.Context, ResponseWriter, *packet.DNSPacket) {}))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, DoHPath+"?dns="+base64.RawURLEncoding.EncodeToString(testQuery().Bytes()), nil))
-	if w.Code != http.StatusServiceUnavailable {
+	if w.Code != http.StatusForbidden {
 		t.Fatalf("status %d", w.Code)
 	}
+}
+
+type seen struct {
+	addr     netip.AddrPort
+	clientID string
+}
+
+func recordingHandler(out *seen) Handler {
+	return HandlerFunc(func(ctx context.Context, w ResponseWriter, req *packet.DNSPacket) {
+		out.addr, out.clientID = w.RemoteAddr(), w.ClientID()
+		_ = w.WriteMsg(packet.NewReply(req))
+	})
+}
+
+func dohGET(path string) *http.Request {
+	return httptest.NewRequest(http.MethodGet, path+"?dns="+base64.RawURLEncoding.EncodeToString(testQuery().Bytes()), nil)
+}
+
+func TestDoHClientIDFromPath(t *testing.T) {
+	var got seen
+	h := NewHTTPHandler(recordingHandler(&got))
+	cases := map[string]struct {
+		status int
+		id     string
+	}{
+		"/dns-query":          {200, ""},
+		"/dns-query/Laptop-1": {200, "laptop-1"},
+		"/dns-query/a/b":      {404, ""},
+		"/dns-query/bad_id":   {404, ""},
+		"/dns-query/":         {404, ""},
+		"/other":              {404, ""},
+	}
+	for path, want := range cases {
+		got = seen{}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, dohGET(path))
+		if w.Code != want.status || got.clientID != want.id {
+			t.Errorf("%s: status %d id %q, want %d %q", path, w.Code, got.clientID, want.status, want.id)
+		}
+	}
+}
+
+func TestDoHTrustedProxies(t *testing.T) {
+	var got seen
+	h := &DoHHandler{Handler: recordingHandler(&got), TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("10.0.0.0/8")}}
+	cases := []struct {
+		peer, xff, realIP, want string
+	}{
+		{"203.0.113.9:4000", "1.1.1.1", "", "203.0.113.9"},                        // untrusted peer: header ignored
+		{"127.0.0.1:4000", "", "", "127.0.0.1"},                                   // trusted peer, no header
+		{"127.0.0.1:4000", "198.51.100.7", "", "198.51.100.7"},                    // single hop
+		{"127.0.0.1:4000", "6.6.6.6, 198.51.100.7, 10.0.0.2", "", "198.51.100.7"}, // spoofed leftmost entry ignored
+		{"127.0.0.1:4000", "", "198.51.100.8", "198.51.100.8"},                    // X-Real-IP fallback
+		{"[::ffff:127.0.0.1]:4000", "198.51.100.7", "", "198.51.100.7"},           // mapped peer
+	}
+	for _, c := range cases {
+		req := dohGET(DoHPath)
+		req.RemoteAddr = c.peer
+		if c.xff != "" {
+			req.Header.Set("X-Forwarded-For", c.xff)
+		}
+		if c.realIP != "" {
+			req.Header.Set("X-Real-IP", c.realIP)
+		}
+		h.ServeHTTP(httptest.NewRecorder(), req)
+		if got.addr.Addr().String() != c.want {
+			t.Errorf("peer=%s xff=%q: got %s, want %s", c.peer, c.xff, got.addr.Addr(), c.want)
+		}
+	}
+}
+
+func TestClientIDFromSNI(t *testing.T) {
+	cases := map[[2]string]string{
+		{"laptop.dns.example.com", "dns.example.com"}:   "laptop",
+		{"LAPTOP.dns.example.com.", "DNS.example.com"}:  "laptop",
+		{"dns.example.com", "dns.example.com"}:          "",
+		{"a.b.dns.example.com", "dns.example.com"}:      "",
+		{"laptop.dns.example.com", ""}:                  "",
+		{"laptop.other.example.com", "dns.example.com"}: "",
+	}
+	for in, want := range cases {
+		if got := clientIDFromSNI(in[0], in[1]); got != want {
+			t.Errorf("clientIDFromSNI(%q, %q) = %q, want %q", in[0], in[1], got, want)
+		}
+	}
+}
+
+func TestDoTClientIDFromSNI(t *testing.T) {
+	cert := selfSigned(t, "*.dns.test")
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	var got seen
+	go (&TCPServer{Handler: recordingHandler(&got), Transport: TransportDoT, Hostname: "dns.test"}).Serve(ln)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(cert.Leaf)
+	conn, err := tls.Dial("tcp", ln.Addr().String(), &tls.Config{ServerName: "router.dns.test", RootCAs: pool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	data := testQuery().Bytes()
+	conn.Write(append(binary.BigEndian.AppendUint16(nil, uint16(len(data))), data...))
+	var length [2]byte
+	if _, err := io.ReadFull(conn, length[:]); err != nil {
+		t.Fatal(err)
+	}
+	if got.clientID != "router" || !got.addr.Addr().IsLoopback() {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func selfSigned(t *testing.T, name string) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		DNSNames:              []string{name},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, _ := x509.ParseCertificate(der)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}
 }

@@ -15,6 +15,10 @@ listens:
     addr: ":443"
     cert_file: fullchain.pem  # dot 必填；doh 不填则以明文 HTTP 服务（放在反向代理后）
     key_file: privkey.pem
+    hostname: dns.example.com # 可选：从 SNI "<id>.dns.example.com" 识别客户端（需泛域名证书）
+  - type: doh
+    addr: "127.0.0.1:8053"
+    trusted_proxies: [127.0.0.1]  # 反向代理的地址，信任其 X-Forwarded-For / X-Real-IP
 
 upstreams:                  # 仅转发模式，按顺序尝试；出错或返回 SERVFAIL/REFUSED 时换下一个
   - type: doh               # udp | tcp | dot | doh
@@ -49,6 +53,16 @@ filters:                    # 仅转发模式
   rules:                    # 内联规则，作为名为 "rules" 的列表安装
     - "||doubleclick.net^"
     - "@@||example.com^"
+
+access:                     # 网络项可以写 CIDR、单个地址或关键字 private
+  allow: [private]          # 不写时：转发模式默认 private，权威模式默认所有人；写 [] 表示只允许带身份的客户端
+  deny: [192.168.1.66]      # 优先级最高，带身份也会被拒绝
+  deny_action: refuse       # refuse（返回 REFUSED）| drop（UDP 不回应，避免被用来反射；TCP/DoT/DoH 仍返回 REFUSED）
+  clients:
+    - name: laptop
+      ids: [k8f3j2q9]       # DoH：/dns-query/k8f3j2q9；DoT：k8f3j2q9.dns.example.com。公网上应视为密钥
+    - name: living-room-tv
+      networks: [192.168.1.50]
 ```
 
 每个 domain 的数据来源只能是 `records`、`zone_file`、`hosts_file` 三者之一。
@@ -61,19 +75,52 @@ hosts 格式（`0.0.0.0 name`）不属于过滤器，请用 `domains[].hosts_fil
 
 ## 热加载
 
-`kill -HUP <pid>` 会重新读取配置文件，并应用 domains、filters（列表、规则、block_mode）以及 TLS 证书。
+`kill -HUP <pid>` 会重新读取配置文件，并应用 domains、access、filters（列表、规则、block_mode）以及 TLS 证书。
 新配置无效时会记录日志并继续使用旧配置。`mode`、`listens`、`upstreams` 和 cache 容量的修改需要重启。
 
-## 部署：公网权威 NS
+## 访问控制
+
+判断顺序为：deny 网络 → 客户端出示的 ID（必须是已知 ID，未知 ID 一律拒绝）→ 客户端所属网络 → allow 网络 → 拒绝。
+识别出的客户端名称会写入查询事件（`-log-queries` 和后续的管理 API）。
+
+客户端 ID 的来源：
+
+| 传输 | 方式 | 设置方法 |
+|------|------|---------|
+| DoH | URL 路径 `/dns-query/<id>` | 所有支持自定义 DoH 地址的系统和浏览器 |
+| DoT | SNI `<id>.<hostname>` | 只能填主机名的系统（例如 Android“私人 DNS”）；需要泛域名证书 `*.dns.example.com` |
+| UDP/TCP | 源地址匹配 `clients[].networks` | 局域网设备的 DHCP 保留地址 |
+
+DoH 部署在反向代理之后时必须配置 `trusted_proxies`。否则所有请求的来源都是代理地址（通常是 127.0.0.1），
+会被 `private` 放行。
+
+转发模式下，如果 allow 允许所有地址，并且 UDP/TCP 监听在非回环地址上，启动时会打印开放解析器（open resolver）警告。
+
+## 部署场景
+
+### 路由器 / 旁路由（替代 dnsmasq 的解析部分）
+
+- 监听 `:53` 的 UDP 与 TCP，使用默认的 `access.allow: [private]`。
+- 内网域名用 static zone（例如 `home.lan`），零散的覆盖用 transparent zone 或 `hosts_file`。
+- DHCP 下发的 DNS 指向本机。注意：dns-go 不提供 DHCP，也不会自动登记 DHCP 租约对应的主机名。
+
+### NAS / homelab（替代 AdGuard Home 的拦截）
+
+- 在上一种场景的基础上配置 `filters.lists` 订阅和 `cache_dir`。
+- 需要区分设备时，在 `clients[].networks` 里写设备的固定地址，查询日志会显示设备名。
+
+### 云主机上的私人解析（AWS、阿里云等）
+
+- **不要**对公网开放 UDP/TCP 53。只开 DoH（443）和 DoT（853），并设置 `access.allow: []`，让所有设备都通过 client ID 认证。
+- 为 `dns.example.com` 和 `*.dns.example.com` 申请证书。续期后执行 `kill -HUP`，监听不会中断。
+- 各平台的设置方式：
+  - macOS / iOS：用描述文件（`.mobileconfig`）配置 DoH `https://dns.example.com/dns-query/<id>`。
+  - Windows 11：在网络设置中开启“DNS over HTTPS”并填写模板。
+  - Android：在“私人 DNS”中填写 `<id>.dns.example.com`。
+  - 浏览器：在安全 DNS 设置中填写 DoH 地址。
+
+### 权威 NS
 
 1. 使用 `config.authoritative.yaml`，同时监听 UDP 和 TCP 的 53 端口（截断后客户端会改用 TCP）。
 2. 在注册商处添加 glue 并设置 NS。大多数注册商要求至少两台 NS：目前可以在两台机器上部署同一份配置（区域传送尚未实现）。
 3. 用 [DNSViz](https://dnsviz.net) 和 `dig +norec @your-ns example.com SOA` 验证。
-
-## 部署：手机 DoH / DoT
-
-1. 使用 `config.yaml`，为域名申请证书（例如 Let's Encrypt），在 `doh` 和 `dot` 监听上配置 `cert_file`/`key_file`。
-   续期后执行 `kill -HUP` 即可，监听不会中断。
-2. iOS：通过描述文件（`.mobileconfig`）配置 DoH 地址 `https://dns.example.com/dns-query`。
-   Android：设置 →“私人 DNS”填写 `dns.example.com`（DoT，853 端口）。
-3. 注意：目前没有访问控制。部署在公网上就是一个开放解析器，只建议用于 DoH/DoT，并且不要对公网开放 UDP/TCP 53。

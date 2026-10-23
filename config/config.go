@@ -42,6 +42,7 @@ type Config struct {
 	Upstreams []UpstreamSpec `yaml:"upstreams"`
 	Cache     CacheSpec      `yaml:"cache"`
 	Filters   FiltersSpec    `yaml:"filters"`
+	Access    AccessSpec     `yaml:"access"`
 }
 
 type ListenSpec struct {
@@ -49,6 +50,31 @@ type ListenSpec struct {
 	Addr     string `yaml:"addr"`
 	CertFile string `yaml:"cert_file"` // required for dot; doh without it serves plain HTTP
 	KeyFile  string `yaml:"key_file"`
+	// Hostname (dot, doh with TLS) enables client IDs from SNI: clients
+	// connecting to "{id}.<hostname>" are identified as {id}.
+	Hostname string `yaml:"hostname"`
+	// TrustedProxies (doh) are reverse proxies whose X-Forwarded-For is
+	// believed. Entries are CIDRs, addresses, or "private".
+	TrustedProxies []string `yaml:"trusted_proxies"`
+}
+
+// AccessSpec controls who may query. Network entries are CIDRs, bare
+// addresses, or the keyword "private" (loopback, RFC 1918, CGNAT,
+// link-local, ULA).
+type AccessSpec struct {
+	// Allow lists networks that may query without a client ID. Omitted:
+	// "private" in forwarding mode, everyone in authoritative mode.
+	Allow      []string     `yaml:"allow"`
+	Deny       []string     `yaml:"deny"`
+	DenyAction string       `yaml:"deny_action"` // refuse (default) | drop
+	Clients    []ClientSpec `yaml:"clients"`
+}
+
+// ClientSpec is a known client, identified by ID or by network.
+type ClientSpec struct {
+	Name     string   `yaml:"name"`
+	IDs      []string `yaml:"ids"`
+	Networks []string `yaml:"networks"`
 }
 
 // DomainSpec is one zone. Exactly one of Records, ZoneFile, or HostsFile
@@ -219,6 +245,19 @@ func (c *Config) Validate() error {
 		}
 		if u.Type == "doh" && u.Method != "get" && u.Method != "post" {
 			return fmt.Errorf("upstreams[%d]: method %q invalid (want get or post)", i, u.Method)
+		}
+	}
+	switch c.Access.DenyAction {
+	case "", "refuse", "drop":
+	default:
+		return fmt.Errorf("access.deny_action %q invalid (want refuse or drop)", c.Access.DenyAction)
+	}
+	for i, l := range c.Listens {
+		if len(l.TrustedProxies) > 0 && l.Type != "doh" {
+			return fmt.Errorf("listens[%d]: trusted_proxies only applies to doh", i)
+		}
+		if l.Hostname != "" && l.CertFile == "" {
+			return fmt.Errorf("listens[%d]: hostname needs TLS (cert_file/key_file)", i)
 		}
 	}
 	switch c.Filters.BlockMode {

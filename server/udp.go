@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/netip"
 
 	"github.com/lsongdev/dns-go/packet"
 )
@@ -79,5 +80,6 @@ func (w *udpWriter) WriteMsg(res *packet.DNSPacket) error {
 	return err
 }
 
-func (w *udpWriter) RemoteAddr() net.Addr { return w.remote }
-func (w *udpWriter) Transport() Transport { return TransportUDP }
+func (w *udpWriter) RemoteAddr() netip.AddrPort { return addrPortOf(w.remote) }
+func (w *udpWriter) Transport() Transport       { return TransportUDP }
+func (w *udpWriter) ClientID() string           { return "" }

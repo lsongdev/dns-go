@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lsongdev/dns-go/access"
 	"github.com/lsongdev/dns-go/cache"
 	"github.com/lsongdev/dns-go/config"
 	"github.com/lsongdev/dns-go/filter"
@@ -414,13 +416,28 @@ func TestUDPTruncationEndToEnd(t *testing.T) {
 	}
 }
 
-type recordingWriter struct{ msg *packet.DNSPacket }
+type recordingWriter struct {
+	msg       *packet.DNSPacket
+	addr      string
+	clientID  string
+	transport server.Transport
+}
 
 func (w *recordingWriter) WriteMsg(m *packet.DNSPacket) error { w.msg = m; return nil }
-func (w *recordingWriter) RemoteAddr() net.Addr {
-	return &net.UDPAddr{IP: net.IPv4(192, 0, 2, 9), Port: 5353}
+func (w *recordingWriter) RemoteAddr() netip.AddrPort {
+	addr := w.addr
+	if addr == "" {
+		addr = "192.0.2.9"
+	}
+	return netip.AddrPortFrom(netip.MustParseAddr(addr), 5353)
 }
-func (w *recordingWriter) Transport() server.Transport { return server.TransportUDP }
+func (w *recordingWriter) Transport() server.Transport {
+	if w.transport == "" {
+		return server.TransportUDP
+	}
+	return w.transport
+}
+func (w *recordingWriter) ClientID() string { return w.clientID }
 
 func TestServeDNSEmitsQueryEvent(t *testing.T) {
 	var events []QueryEvent
@@ -523,5 +540,99 @@ filters:
 	bad.Mode = config.ModeAuthoritative
 	if err := svc.Apply(&bad); err == nil {
 		t.Fatal("mode changes need a restart")
+	}
+}
+
+func TestAccessControl(t *testing.T) {
+	ctl, err := access.New(access.Rules{
+		Allow: access.Private,
+		Deny:  []netip.Prefix{netip.MustParsePrefix("192.168.9.0/24")},
+		Clients: []access.Client{
+			{Name: "laptop", IDs: []string{"k3y"}},
+			{Name: "tv", Networks: []netip.Prefix{netip.MustParsePrefix("192.168.1.50/32")}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []QueryEvent
+	up := &stubUpstream{}
+	e := New(Options{Zones: zones(t, false), Upstream: up, Access: ctl, OnQuery: func(ev QueryEvent) { events = append(events, ev) }})
+	serve := func(w *recordingWriter) (*packet.DNSPacket, QueryEvent) {
+		w.msg = nil
+		e.ServeDNS(context.Background(), w, withEDNS(query("a.com", packet.DNSTypeA), false))
+		return w.msg, events[len(events)-1]
+	}
+
+	cases := []struct {
+		name       string
+		w          *recordingWriter
+		wantRCode  uint16
+		wantClient string
+	}{
+		{"LAN allowed", &recordingWriter{addr: "192.168.1.10"}, packet.RCodeSuccess, ""},
+		{"client by network", &recordingWriter{addr: "192.168.1.50"}, packet.RCodeSuccess, "tv"},
+		{"public refused", &recordingWriter{addr: "203.0.113.5"}, packet.RCodeRefused, ""},
+		{"public with ID", &recordingWriter{addr: "203.0.113.5", clientID: "K3Y", transport: server.TransportDoH}, packet.RCodeSuccess, "laptop"},
+		{"unknown ID refused even on LAN", &recordingWriter{addr: "192.168.1.10", clientID: "nope"}, packet.RCodeRefused, ""},
+		{"deny beats ID", &recordingWriter{addr: "192.168.9.1", clientID: "k3y"}, packet.RCodeRefused, ""},
+	}
+	for _, c := range cases {
+		msg, ev := serve(c.w)
+		if msg == nil || msg.RCode() != c.wantRCode || ev.ClientName != c.wantClient {
+			t.Errorf("%s: rcode=%v client=%q event=%+v", c.name, msg, ev.ClientName, ev)
+			continue
+		}
+		if c.wantRCode == packet.RCodeRefused && (ev.Source != SourceDenied || msg.OPT() == nil || msg.Header.RA != 1) {
+			t.Errorf("%s: refusal should be a proper reply with OPT, got source=%s", c.name, ev.Source)
+		}
+	}
+	if up.calls() != 3 {
+		t.Fatalf("refused queries must not reach upstream (calls=%d)", up.calls())
+	}
+
+	rules := ctl.Rules()
+	rules.DenyAction = access.Drop
+	if err := ctl.Set(rules); err != nil {
+		t.Fatal(err)
+	}
+	if msg, ev := serve(&recordingWriter{addr: "203.0.113.5"}); msg != nil || ev.Source != SourceDenied {
+		t.Fatal("drop must send nothing on UDP")
+	}
+	if msg, _ := serve(&recordingWriter{addr: "203.0.113.5", transport: server.TransportTCP}); msg == nil || msg.RCode() != packet.RCodeRefused {
+		t.Fatal("drop falls back to REFUSED on TCP")
+	}
+}
+
+func TestAccessDefaultsByMode(t *testing.T) {
+	fwd, err := config.Parse([]byte(`
+listens: [{type: udp, addr: ":53"}]
+upstreams: [{type: udp, addr: "127.0.0.1:1"}]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules, err := AccessRulesFromConfig(fwd)
+	if err != nil || len(rules.Allow) != len(access.Private) {
+		t.Fatalf("forwarding default should be private networks: %+v %v", rules.Allow, err)
+	}
+	fwd.Access.Allow = []string{}
+	if rules, _ := AccessRulesFromConfig(fwd); rules.Allow == nil || len(rules.Allow) != 0 {
+		t.Fatal("explicit empty allow means nobody without an ID")
+	}
+	auth, err := config.Parse([]byte(`
+mode: authoritative
+listens: [{type: udp, addr: ":53"}]
+domains: [{domain: a.com, records: ["@ IN A 192.0.2.1"]}]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rules, _ := AccessRulesFromConfig(auth); rules.Allow != nil {
+		t.Fatal("authoritative default should allow everyone")
+	}
+	fwd.Access.Allow = []string{"not-a-network"}
+	if _, err := AccessRulesFromConfig(fwd); err == nil {
+		t.Fatal("invalid network should fail")
 	}
 }

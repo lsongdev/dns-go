@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"io"
 	"mime"
-	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/lsongdev/dns-go/packet"
@@ -20,14 +21,12 @@ const DoHPath = "/dns-query"
 
 const dnsMessageType = "application/dns-message"
 
-// NewHTTPServer returns an http.Server that serves DoH at DoHPath. Callers
-// that also serve an API can instead mount NewHTTPHandler on their own mux.
-func NewHTTPServer(addr string, h Handler) *http.Server {
-	mux := http.NewServeMux()
-	mux.Handle(DoHPath, NewHTTPHandler(h))
+// NewHTTPServer returns an http.Server with timeouts suited to DoH. h is
+// usually a *DoHHandler, or a mux that mounts one next to other routes.
+func NewHTTPServer(addr string, h http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           h,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -38,21 +37,20 @@ func NewHTTPServer(addr string, h Handler) *http.Server {
 // ListenHTTP serves DoH over plain HTTP, for use behind a TLS-terminating
 // reverse proxy.
 func ListenHTTP(addr string, h Handler) error {
-	return NewHTTPServer(addr, h).ListenAndServe()
+	return NewHTTPServer(addr, NewHTTPHandler(h)).ListenAndServe()
 }
 
 // ListenHTTPS serves DoH over HTTPS (HTTP/2 when the client supports it).
 func ListenHTTPS(addr string, config *tls.Config, h Handler) error {
-	srv := NewHTTPServer(addr, h)
-	srv.TLSConfig = config
-	ln, err := tls.Listen("tcp", addr, withHTTP2(config))
+	ln, err := tls.Listen("tcp", addr, WithHTTP2(config))
 	if err != nil {
 		return err
 	}
-	return srv.Serve(ln)
+	return NewHTTPServer(addr, NewHTTPHandler(h)).Serve(ln)
 }
 
-func withHTTP2(config *tls.Config) *tls.Config {
+// WithHTTP2 returns a copy of config that offers h2 via ALPN.
+func WithHTTP2(config *tls.Config) *tls.Config {
 	c := config.Clone()
 	if len(c.NextProtos) == 0 {
 		c.NextProtos = []string{"h2", "http/1.1"}
@@ -60,45 +58,116 @@ func withHTTP2(config *tls.Config) *tls.Config {
 	return c
 }
 
-// NewHTTPHandler returns an RFC 8484 DNS-over-HTTPS handler.
-func NewHTTPHandler(h Handler) http.Handler {
-	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		data, err := readDoHRequest(r)
-		if err != nil {
-			status := http.StatusBadRequest
-			var methodErr *methodNotAllowedError
-			if errors.As(err, &methodErr) {
-				rw.Header().Set("Allow", "GET, POST")
-				status = http.StatusMethodNotAllowed
-			}
-			http.Error(rw, err.Error(), status)
-			return
-		}
-		req, err := packet.FromBytes(data)
-		if err != nil {
-			http.Error(rw, "invalid DNS message", http.StatusBadRequest)
-			return
-		}
-		w := &httpWriter{rw: rw, remote: httpRemoteAddr(r)}
-		h.ServeDNS(r.Context(), w, req)
-		if !w.written {
-			http.Error(rw, "no DNS response", http.StatusServiceUnavailable)
-		}
-	})
+// NewHTTPHandler returns a DoHHandler with default settings.
+func NewHTTPHandler(h Handler) *DoHHandler {
+	return &DoHHandler{Handler: h}
 }
 
-func httpRemoteAddr(r *http.Request) net.Addr {
-	addr, err := net.ResolveTCPAddr("tcp", r.RemoteAddr)
-	if err != nil {
-		return &net.TCPAddr{}
+// DoHHandler serves RFC 8484 DNS-over-HTTPS at DoHPath and, with a client
+// identifier, at DoHPath + "/{id}". Mount it for both patterns when using
+// a mux. Other paths get 404.
+type DoHHandler struct {
+	Handler Handler
+	// TrustedProxies are peers (e.g. a local nginx) whose X-Forwarded-For /
+	// X-Real-IP headers name the real client. Requests from other peers
+	// never have those headers honored.
+	TrustedProxies []netip.Prefix
+	// Hostname enables client IDs from TLS SNI ("{id}.<Hostname>") when this
+	// process terminates TLS. A path ID takes precedence.
+	Hostname string
+}
+
+func (d *DoHHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
+	clientID, ok := clientIDFromPath(r.URL.Path)
+	if !ok {
+		http.NotFound(rw, r)
+		return
 	}
-	return addr
+	if clientID == "" && r.TLS != nil {
+		clientID = clientIDFromSNI(r.TLS.ServerName, d.Hostname)
+	}
+	data, err := readDoHRequest(r)
+	if err != nil {
+		status := http.StatusBadRequest
+		var methodErr *methodNotAllowedError
+		if errors.As(err, &methodErr) {
+			rw.Header().Set("Allow", "GET, POST")
+			status = http.StatusMethodNotAllowed
+		}
+		http.Error(rw, err.Error(), status)
+		return
+	}
+	req, err := packet.FromBytes(data)
+	if err != nil {
+		http.Error(rw, "invalid DNS message", http.StatusBadRequest)
+		return
+	}
+	w := &httpWriter{rw: rw, remote: d.remoteAddr(r), clientID: clientID}
+	d.Handler.ServeDNS(r.Context(), w, req)
+	if !w.written {
+		// The handler chose not to answer (e.g. access policy "drop").
+		http.Error(rw, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+	}
+}
+
+// clientIDFromPath accepts DoHPath and DoHPath/{id}.
+func clientIDFromPath(path string) (string, bool) {
+	if path == DoHPath {
+		return "", true
+	}
+	id, ok := strings.CutPrefix(path, DoHPath+"/")
+	if !ok || !ValidClientID(id) {
+		return "", false
+	}
+	return strings.ToLower(id), true
+}
+
+// remoteAddr returns the client address, following X-Forwarded-For from
+// right to left through trusted proxies only.
+func (d *DoHHandler) remoteAddr(r *http.Request) netip.AddrPort {
+	peer, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil {
+		return netip.AddrPort{}
+	}
+	peer = netip.AddrPortFrom(peer.Addr().Unmap(), peer.Port())
+	if !d.trusted(peer.Addr()) {
+		return peer
+	}
+	var hops []string
+	for _, v := range r.Header.Values("X-Forwarded-For") {
+		hops = append(hops, strings.Split(v, ",")...)
+	}
+	if len(hops) == 0 {
+		hops = r.Header.Values("X-Real-Ip")
+	}
+	client := peer
+	for i := len(hops) - 1; i >= 0; i-- {
+		addr, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
+		if err != nil {
+			break
+		}
+		client = netip.AddrPortFrom(addr.Unmap(), 0)
+		if !d.trusted(client.Addr()) {
+			break
+		}
+	}
+	return client
+}
+
+func (d *DoHHandler) trusted(addr netip.Addr) bool {
+	for _, p := range d.TrustedProxies {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 type httpWriter struct {
-	rw      http.ResponseWriter
-	remote  net.Addr
-	written bool
+	rw       http.ResponseWriter
+	remote   netip.AddrPort
+	clientID string
+	written  bool
 }
 
 func (w *httpWriter) WriteMsg(res *packet.DNSPacket) error {
@@ -106,7 +175,6 @@ func (w *httpWriter) WriteMsg(res *packet.DNSPacket) error {
 		return errors.New("server: response already written")
 	}
 	w.written = true
-	// RFC 8484 §4.1: the DNS ID SHOULD be 0 in requests; replies echo it.
 	data, _ := res.Pack(packet.MaxMessageSize)
 	header := w.rw.Header()
 	header.Set("Content-Type", dnsMessageType)
@@ -116,8 +184,9 @@ func (w *httpWriter) WriteMsg(res *packet.DNSPacket) error {
 	return err
 }
 
-func (w *httpWriter) RemoteAddr() net.Addr { return w.remote }
-func (w *httpWriter) Transport() Transport { return TransportDoH }
+func (w *httpWriter) RemoteAddr() netip.AddrPort { return w.remote }
+func (w *httpWriter) Transport() Transport       { return TransportDoH }
+func (w *httpWriter) ClientID() string           { return w.clientID }
 
 // MinTTL is the freshness lifetime of a response (RFC 8484 §5.1): the
 // smallest TTL among answer and authority records, excluding OPT.

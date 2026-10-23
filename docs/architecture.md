@@ -4,6 +4,7 @@
 
 ```
 cmd/dns-go   命令行：读配置、开监听、SIGHUP 热加载、证书重载
+access       访问控制：网络 allow/deny 与客户端身份
 engine       解析引擎 Engine（实现 server.Handler）与按配置组装的 Service
 zone         zone 文件 / hosts 解析，以及可增删改查的 zone 存储 Store
 filter       AdBlock 规则匹配 Filter，以及列表订阅 Subscriptions
@@ -78,6 +79,7 @@ svc.Subscriptions.Set([]filter.Source{...}) / Refresh(ctx, name) / Status()
 svc.Engine.SetBlockMode(engine.BlockNXDomain)
 svc.Engine.Resolve(ctx, req)      // “测试解析”：返回应答、来源阶段、命中的规则
 svc.Cache.Flush()
+svc.Access.Set(access.Rules{...}) / Rules() / Check(req)
 ```
 
 并发模型：`zone.Store` 和 `filter.Filter` 的读路径无锁（`atomic.Pointer` 指向不可变快照），
@@ -95,5 +97,6 @@ svc.Cache.Flush()
 - DNSSEC 在线签名：可以托管预签名的 zone（RRSIG 随应答返回），但不会自己签名；
 - 从根开始的迭代递归：转发模式依赖上游；
 - 并发相同查询的合并（singleflight）、过期缓存兜底（serve-stale）、预取；
-- 响应速率限制（RRL）、按客户端的 ACL、DoH 路径令牌鉴权；
+- 响应速率限制（RRL）与按客户端的查询限速；
+- 按客户端的策略（例如某个设备不过滤）：身份已经识别，策略尚未实现；
 - 拦截 CNAME cloaking（过滤只检查问题中的名字）。

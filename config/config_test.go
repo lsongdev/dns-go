@@ -111,3 +111,32 @@ func TestLoadRepoConfig(t *testing.T) {
 		t.Errorf("unexpected repo config: %+v", cfg)
 	}
 }
+
+func TestAccessAndListenerValidation(t *testing.T) {
+	upstream := "\nupstreams: [{type: udp, addr: \"1.1.1.1:53\"}]\n"
+	ok := `
+listens:
+  - {type: doh, addr: ":443", cert_file: c, key_file: k, hostname: dns.example.com, trusted_proxies: [127.0.0.1]}
+access:
+  allow: [private, 203.0.113.0/24]
+  deny_action: drop
+  clients:
+    - {name: laptop, ids: [k3y], networks: [192.168.1.20]}
+` + upstream
+	cfg, err := Parse([]byte(ok))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Access.Clients) != 1 || cfg.Access.Clients[0].IDs[0] != "k3y" || cfg.Listens[0].Hostname != "dns.example.com" {
+		t.Fatalf("parsed %+v", cfg)
+	}
+	for name, src := range map[string]string{
+		"bad deny action":      listens + upstream + "access: {deny_action: ignore}",
+		"proxies on udp":       "listens: [{type: udp, addr: x, trusted_proxies: [127.0.0.1]}]" + upstream,
+		"hostname without TLS": "listens: [{type: tcp, addr: x, hostname: dns.example.com}]" + upstream,
+	} {
+		if _, err := Parse([]byte(src)); err == nil {
+			t.Errorf("%s: expected error", name)
+		}
+	}
+}

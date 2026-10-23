@@ -2,8 +2,10 @@ package engine
 
 import (
 	"fmt"
+	"net/netip"
 	"strings"
 
+	"github.com/lsongdev/dns-go/access"
 	"github.com/lsongdev/dns-go/cache"
 	"github.com/lsongdev/dns-go/config"
 	"github.com/lsongdev/dns-go/filter"
@@ -19,6 +21,7 @@ type Service struct {
 	Filter        *filter.Filter        // nil in authoritative mode
 	Subscriptions *filter.Subscriptions // nil in authoritative mode
 	Cache         *cache.Cache          // nil when caching is disabled
+	Access        *access.Controller
 
 	mode     string
 	upstream *proxy.Pool
@@ -37,7 +40,14 @@ func NewService(cfg *config.Config, hooks Hooks) (*Service, error) {
 		mode:  cfg.Mode,
 		Zones: zone.NewStore(zone.StoreOptions{Authoritative: cfg.Mode == config.ModeAuthoritative}),
 	}
-	opts := Options{Zones: s.Zones, OnQuery: hooks.OnQuery}
+	rules, err := AccessRulesFromConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if s.Access, err = access.New(rules); err != nil {
+		return nil, err
+	}
+	opts := Options{Zones: s.Zones, Access: s.Access, OnQuery: hooks.OnQuery}
 	if cfg.Mode == config.ModeForwarding {
 		pool, err := proxy.NewFromSpecs(upstreamSpecs(cfg.Upstreams))
 		if err != nil {
@@ -67,18 +77,29 @@ func NewService(cfg *config.Config, hooks Hooks) (*Service, error) {
 	return s, nil
 }
 
-// Apply loads zones, filter lists, and the block mode from cfg. Listeners,
-// mode, upstreams, and cache sizing need a restart; a changed mode is
-// rejected. On error the zones are unchanged.
+// Apply loads zones, access rules, filter lists, and the block mode from
+// cfg. Listeners, mode, upstreams, and cache sizing need a restart; a
+// changed mode is rejected. Zones and access rules are validated before
+// either is replaced.
 func (s *Service) Apply(cfg *config.Config) error {
 	if cfg.Mode != s.mode {
 		return fmt.Errorf("engine: mode change (%s -> %s) requires a restart", s.mode, cfg.Mode)
+	}
+	rules, err := AccessRulesFromConfig(cfg)
+	if err != nil {
+		return err
+	}
+	if _, err := access.New(rules); err != nil {
+		return err
 	}
 	zones, err := ZonesFromConfig(cfg.Domains)
 	if err != nil {
 		return err
 	}
 	if err := s.Zones.Replace(zones); err != nil {
+		return err
+	}
+	if err := s.Access.Set(rules); err != nil {
 		return err
 	}
 	if s.Filter == nil {
@@ -143,6 +164,38 @@ func ZonesFromConfig(domains []config.DomainSpec) ([]*zone.Zone, error) {
 		zones = append(zones, z)
 	}
 	return zones, nil
+}
+
+// AccessRulesFromConfig converts the access section, applying the mode's
+// default Allow when it is omitted: private networks for a forwarding
+// resolver (never an open resolver by accident), everyone for an
+// authoritative server.
+func AccessRulesFromConfig(cfg *config.Config) (access.Rules, error) {
+	spec := cfg.Access
+	rules := access.Rules{DenyAction: access.Action(spec.DenyAction)}
+	var err error
+	switch {
+	case spec.Allow != nil:
+		if rules.Allow, err = access.ParseNetworks(spec.Allow); err != nil {
+			return rules, err
+		}
+		if rules.Allow == nil {
+			rules.Allow = []netip.Prefix{}
+		}
+	case cfg.Mode == config.ModeForwarding:
+		rules.Allow = append([]netip.Prefix{}, access.Private...)
+	}
+	if rules.Deny, err = access.ParseNetworks(spec.Deny); err != nil {
+		return rules, err
+	}
+	for _, c := range spec.Clients {
+		networks, err := access.ParseNetworks(c.Networks)
+		if err != nil {
+			return rules, fmt.Errorf("client %q: %w", c.Name, err)
+		}
+		rules.Clients = append(rules.Clients, access.Client{Name: c.Name, IDs: c.IDs, Networks: networks})
+	}
+	return rules, nil
 }
 
 // ParseBlockMode maps the config spelling to a BlockMode.

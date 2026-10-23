@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lsongdev/dns-go/access"
 	"github.com/lsongdev/dns-go/config"
 	"github.com/lsongdev/dns-go/engine"
 	"github.com/lsongdev/dns-go/filter"
@@ -53,6 +54,7 @@ func main() {
 		go func() { errCh <- serve() }()
 	}
 	log.Printf("mode %s: %d zone(s)", cfg.Mode, len(svc.Zones.List()))
+	warnOpenResolver(cfg, svc)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
@@ -73,6 +75,27 @@ func main() {
 			}
 			return
 		}
+	}
+}
+
+// warnOpenResolver flags a forwarding resolver that answers anyone on a
+// non-loopback UDP/TCP socket: such servers get abused for amplification.
+func warnOpenResolver(cfg *config.Config, svc *engine.Service) {
+	if cfg.Mode != config.ModeForwarding || !svc.Access.AllowsEveryone() {
+		return
+	}
+	for _, l := range cfg.Listens {
+		if l.Type != "udp" && l.Type != "tcp" {
+			continue
+		}
+		host, _, err := net.SplitHostPort(l.Addr)
+		if err != nil {
+			continue
+		}
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			continue
+		}
+		log.Printf("WARNING: open resolver: access.allow admits every address on %s %s; restrict it or use client IDs over DoH/DoT", l.Type, l.Addr)
 	}
 }
 
@@ -117,7 +140,7 @@ func listen(l config.ListenSpec, h server.Handler, certs *certStore) (io.Closer,
 		if err != nil {
 			return nil, nil, err
 		}
-		s := &server.TCPServer{Handler: h}
+		s := &server.TCPServer{Handler: h, Hostname: l.Hostname}
 		if tlsConfig != nil {
 			ln = tls.NewListener(ln, tlsConfig)
 			s.Transport = server.TransportDoT
@@ -129,11 +152,15 @@ func listen(l config.ListenSpec, h server.Handler, certs *certStore) (io.Closer,
 			return nil, nil, err
 		}
 		if tlsConfig != nil {
-			cfg := tlsConfig.Clone()
-			cfg.NextProtos = []string{"h2", "http/1.1"}
-			ln = tls.NewListener(ln, cfg)
+			ln = tls.NewListener(ln, server.WithHTTP2(tlsConfig))
 		}
-		srv := server.NewHTTPServer(l.Addr, h)
+		proxies, err := access.ParseNetworks(l.TrustedProxies)
+		if err != nil {
+			ln.Close()
+			return nil, nil, err
+		}
+		doh := &server.DoHHandler{Handler: h, TrustedProxies: proxies, Hostname: l.Hostname}
+		srv := server.NewHTTPServer(l.Addr, doh)
 		return srv, func() error {
 			if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
 				return err
@@ -198,8 +225,12 @@ func logListUpdate(s filter.SourceStatus) {
 }
 
 func logQuery(ev engine.QueryEvent) {
+	client := ev.Client.String()
+	if ev.ClientName != "" {
+		client += "(" + ev.ClientName + ")"
+	}
 	line := fmt.Sprintf("%s %s %s type=%d rcode=%d answers=%d source=%s %s",
-		ev.Transport, ev.Client, ev.Name, ev.Type, ev.RCode, ev.Answers, ev.Source, ev.Duration.Round(time.Microsecond))
+		ev.Transport, client, ev.Name, ev.Type, ev.RCode, ev.Answers, ev.Source, ev.Duration.Round(time.Microsecond))
 	if ev.Filter.Rule != "" {
 		line += fmt.Sprintf(" filter=%s:%q", ev.Filter.List, ev.Filter.Rule)
 	}
