@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"time"
 
@@ -13,6 +14,8 @@ import (
 type Duration time.Duration
 
 func (d Duration) Duration() time.Duration { return time.Duration(d) }
+
+func (d Duration) MarshalYAML() (any, error) { return time.Duration(d).String(), nil }
 
 func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 	var s string
@@ -38,24 +41,36 @@ type Config struct {
 	// zones, filtering, and caching). Default: forwarding.
 	Mode      string         `yaml:"mode"`
 	Listens   []ListenSpec   `yaml:"listens"`
-	Domains   []DomainSpec   `yaml:"domains"`
-	Upstreams []UpstreamSpec `yaml:"upstreams"`
-	Cache     CacheSpec      `yaml:"cache"`
-	Filters   FiltersSpec    `yaml:"filters"`
-	Access    AccessSpec     `yaml:"access"`
+	Domains   []DomainSpec   `yaml:"domains,omitempty"`
+	Upstreams []UpstreamSpec `yaml:"upstreams,omitempty"`
+	Cache     CacheSpec      `yaml:"cache,omitempty"`
+	Filters   FiltersSpec    `yaml:"filters,omitempty"`
+	Access    AccessSpec     `yaml:"access,omitempty"`
+	API       APISpec        `yaml:"api,omitempty"`
+}
+
+// APISpec enables the HTTP management API and web panel.
+type APISpec struct {
+	// Addr enables the API ("127.0.0.1:8080"). Empty disables it.
+	Addr string `yaml:"addr"`
+	// Token is the bearer token clients must send. Required unless Addr is
+	// a loopback address.
+	Token    string `yaml:"token,omitempty"`
+	CertFile string `yaml:"cert_file,omitempty"`
+	KeyFile  string `yaml:"key_file,omitempty"`
 }
 
 type ListenSpec struct {
 	Type     string `yaml:"type"` // udp | tcp | dot | doh
 	Addr     string `yaml:"addr"`
-	CertFile string `yaml:"cert_file"` // required for dot; doh without it serves plain HTTP
-	KeyFile  string `yaml:"key_file"`
+	CertFile string `yaml:"cert_file,omitempty"` // required for dot; doh without it serves plain HTTP
+	KeyFile  string `yaml:"key_file,omitempty"`
 	// Hostname (dot, doh with TLS) enables client IDs from SNI: clients
 	// connecting to "{id}.<hostname>" are identified as {id}.
-	Hostname string `yaml:"hostname"`
+	Hostname string `yaml:"hostname,omitempty"`
 	// TrustedProxies (doh) are reverse proxies whose X-Forwarded-For is
 	// believed. Entries are CIDRs, addresses, or "private".
-	TrustedProxies []string `yaml:"trusted_proxies"`
+	TrustedProxies []string `yaml:"trusted_proxies,omitempty"`
 }
 
 // AccessSpec controls who may query. Network entries are CIDRs, bare
@@ -64,66 +79,84 @@ type ListenSpec struct {
 type AccessSpec struct {
 	// Allow lists networks that may query without a client ID. Omitted:
 	// "private" in forwarding mode, everyone in authoritative mode.
-	Allow      []string     `yaml:"allow"`
-	Deny       []string     `yaml:"deny"`
-	DenyAction string       `yaml:"deny_action"` // refuse (default) | drop
-	Clients    []ClientSpec `yaml:"clients"`
+	Allow      *[]string    `yaml:"allow,omitempty"`
+	Deny       []string     `yaml:"deny,omitempty"`
+	DenyAction string       `yaml:"deny_action,omitempty"` // refuse (default) | drop
+	Clients    []ClientSpec `yaml:"clients,omitempty"`
 }
 
 // ClientSpec is a known client, identified by ID or by network.
 type ClientSpec struct {
 	Name     string   `yaml:"name"`
-	IDs      []string `yaml:"ids"`
-	Networks []string `yaml:"networks"`
+	IDs      []string `yaml:"ids,omitempty"`
+	Networks []string `yaml:"networks,omitempty"`
 }
 
 // DomainSpec is one zone. Exactly one of Records, ZoneFile, or HostsFile
 // supplies its data.
 type DomainSpec struct {
-	Domain string `yaml:"domain"` // zone origin; hosts files default to the root
+	Domain string `yaml:"domain,omitempty"` // zone origin; hosts files default to the root
 	// Kind is "static" (the zone owns its namespace; default) or
 	// "transparent" (answer only names with data, let others resolve
 	// normally). Hosts files are always transparent.
-	Kind      string   `yaml:"kind"`
-	Records   []string `yaml:"records"`
-	ZoneFile  string   `yaml:"zone_file"`
-	HostsFile string   `yaml:"hosts_file"`
+	Kind      string   `yaml:"kind,omitempty"`
+	Records   []string `yaml:"records,omitempty"`
+	ZoneFile  string   `yaml:"zone_file,omitempty"`
+	HostsFile string   `yaml:"hosts_file,omitempty"`
 }
 
 type UpstreamSpec struct {
 	Type    string   `yaml:"type"` // udp | tcp | dot | doh
 	Addr    string   `yaml:"addr"`
-	Method  string   `yaml:"method"` // doh: get | post
-	Timeout Duration `yaml:"timeout"`
+	Method  string   `yaml:"method,omitempty"` // doh: get | post
+	Timeout Duration `yaml:"timeout,omitempty"`
 }
 
 type CacheSpec struct {
-	Enabled     bool     `yaml:"enabled"`
-	MinTTL      Duration `yaml:"min_ttl"`
-	MaxTTL      Duration `yaml:"max_ttl"`
-	NegativeTTL Duration `yaml:"negative_ttl"`
-	MaxEntries  int      `yaml:"max_entries"`
+	Enabled     bool     `yaml:"enabled,omitempty"`
+	MinTTL      Duration `yaml:"min_ttl,omitempty"`
+	MaxTTL      Duration `yaml:"max_ttl,omitempty"`
+	NegativeTTL Duration `yaml:"negative_ttl,omitempty"`
+	MaxEntries  int      `yaml:"max_entries,omitempty"`
 }
 
 type FiltersSpec struct {
 	// BlockMode is how blocked names are answered: "zero_ip" (A 0.0.0.0,
 	// AAAA ::, other types NODATA; default), "nxdomain", or "refused".
-	BlockMode string     `yaml:"block_mode"`
-	CacheDir  string     `yaml:"cache_dir"` // keeps downloaded lists across restarts
-	Lists     []ListSpec `yaml:"lists"`
-	Rules     []string   `yaml:"rules"` // inline rules, installed as list "rules"
+	BlockMode string     `yaml:"block_mode,omitempty"`
+	CacheDir  string     `yaml:"cache_dir,omitempty"` // keeps downloaded lists across restarts
+	Lists     []ListSpec `yaml:"lists,omitempty"`
+	Rules     []string   `yaml:"rules,omitempty"` // inline rules, installed as list "rules"
 }
 
 type ListSpec struct {
 	Name    string   `yaml:"name"`
-	Kind    string   `yaml:"kind"` // block (default) | allow
-	URL     string   `yaml:"url"`
-	File    string   `yaml:"file"`
-	Enabled *bool    `yaml:"enabled"` // default true
-	Refresh Duration `yaml:"refresh"`
+	Kind    string   `yaml:"kind,omitempty"` // block (default) | allow
+	URL     string   `yaml:"url,omitempty"`
+	File    string   `yaml:"file,omitempty"`
+	Enabled *bool    `yaml:"enabled,omitempty"` // default true
+	Refresh Duration `yaml:"refresh,omitempty"`
 }
 
 func (l ListSpec) IsEnabled() bool { return l.Enabled == nil || *l.Enabled }
+
+func (a APISpec) validate() error {
+	if a.Addr == "" {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(a.Addr)
+	if err != nil {
+		return fmt.Errorf("api.addr: %w", err)
+	}
+	ip := net.ParseIP(host)
+	if a.Token == "" && (ip == nil || !ip.IsLoopback()) {
+		return fmt.Errorf("api.token is required when api.addr is not a loopback address")
+	}
+	if (a.CertFile == "") != (a.KeyFile == "") {
+		return fmt.Errorf("api: cert_file and key_file must be set together")
+	}
+	return nil
+}
 
 // RulesListName is the filter list that holds FiltersSpec.Rules.
 const RulesListName = "rules"
@@ -134,6 +167,33 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	return Parse(data)
+}
+
+// Save writes c to path atomically (temp file + rename). Comments in an
+// existing file are not preserved.
+func (c *Config) Save(path string) error {
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// Clone returns a deep copy of c.
+func (c *Config) Clone() *Config {
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		panic(err) // Config contains only marshalable fields
+	}
+	out := &Config{}
+	if err := yaml.Unmarshal(data, out); err != nil {
+		panic(err)
+	}
+	return out
 }
 
 func Parse(data []byte) (*Config, error) {
@@ -219,8 +279,8 @@ func (c *Config) Validate() error {
 				sources++
 			}
 		}
-		if sources != 1 {
-			return fmt.Errorf("domains[%d]: exactly one of records, zone_file, hosts_file required", i)
+		if sources > 1 {
+			return fmt.Errorf("domains[%d]: only one of records, zone_file, hosts_file allowed", i)
 		}
 		if d.HostsFile == "" && d.Domain == "" {
 			return fmt.Errorf("domains[%d]: domain required", i)
@@ -246,6 +306,9 @@ func (c *Config) Validate() error {
 		if u.Type == "doh" && u.Method != "get" && u.Method != "post" {
 			return fmt.Errorf("upstreams[%d]: method %q invalid (want get or post)", i, u.Method)
 		}
+	}
+	if err := c.API.validate(); err != nil {
+		return err
 	}
 	switch c.Access.DenyAction {
 	case "", "refuse", "drop":

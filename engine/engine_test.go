@@ -616,7 +616,7 @@ upstreams: [{type: udp, addr: "127.0.0.1:1"}]
 	if err != nil || len(rules.Allow) != len(access.Private) {
 		t.Fatalf("forwarding default should be private networks: %+v %v", rules.Allow, err)
 	}
-	fwd.Access.Allow = []string{}
+	fwd.Access.Allow = &[]string{}
 	if rules, _ := AccessRulesFromConfig(fwd); rules.Allow == nil || len(rules.Allow) != 0 {
 		t.Fatal("explicit empty allow means nobody without an ID")
 	}
@@ -631,7 +631,7 @@ domains: [{domain: a.com, records: ["@ IN A 192.0.2.1"]}]
 	if rules, _ := AccessRulesFromConfig(auth); rules.Allow != nil {
 		t.Fatal("authoritative default should allow everyone")
 	}
-	fwd.Access.Allow = []string{"not-a-network"}
+	fwd.Access.Allow = &[]string{"not-a-network"}
 	if _, err := AccessRulesFromConfig(fwd); err == nil {
 		t.Fatal("invalid network should fail")
 	}

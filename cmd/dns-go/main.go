@@ -16,10 +16,12 @@ import (
 	"time"
 
 	"github.com/lsongdev/dns-go/access"
+	"github.com/lsongdev/dns-go/api"
 	"github.com/lsongdev/dns-go/config"
 	"github.com/lsongdev/dns-go/engine"
 	"github.com/lsongdev/dns-go/filter"
 	"github.com/lsongdev/dns-go/server"
+	"github.com/lsongdev/dns-go/web"
 )
 
 func main() {
@@ -31,15 +33,22 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	hooks := engine.Hooks{OnListUpdate: logListUpdate}
-	if *logQueries {
-		hooks.OnQuery = logQuery
+	stats := api.NewStats()
+	hooks := engine.Hooks{
+		OnListUpdate: logListUpdate,
+		OnQuery: func(ev engine.QueryEvent) {
+			stats.Record(ev)
+			if *logQueries {
+				logQuery(ev)
+			}
+		},
 	}
 	svc, err := engine.NewService(cfg, hooks)
 	if err != nil {
 		log.Fatalf("engine: %v", err)
 	}
 	defer svc.Close()
+	mgr := api.NewManager(*cfgPath, cfg, svc)
 
 	certs := &certStore{}
 	listeners := make([]io.Closer, 0, len(cfg.Listens))
@@ -51,6 +60,14 @@ func main() {
 		}
 		listeners = append(listeners, closer)
 		log.Printf("listening %s %s", l.Type, l.Addr)
+		go func() { errCh <- serve() }()
+	}
+	if cfg.API.Addr != "" {
+		closer, serve, err := listenAPI(cfg.API, mgr, stats, certs)
+		if err != nil {
+			log.Fatalf("api %s: %v", cfg.API.Addr, err)
+		}
+		listeners = append(listeners, closer)
 		go func() { errCh <- serve() }()
 	}
 	log.Printf("mode %s: %d zone(s)", cfg.Mode, len(svc.Zones.List()))
@@ -66,7 +83,7 @@ func main() {
 			}
 		case sig := <-sigCh:
 			if sig == syscall.SIGHUP {
-				reload(*cfgPath, svc, certs)
+				reload(mgr, certs)
 				continue
 			}
 			log.Printf("received %v, shutting down", sig)
@@ -101,20 +118,46 @@ func warnOpenResolver(cfg *config.Config, svc *engine.Service) {
 
 // reload re-reads the config and certificates. Failures keep the running
 // state, so a typo in the file never takes the server down.
-func reload(path string, svc *engine.Service, certs *certStore) {
-	cfg, err := config.Load(path)
-	if err != nil {
-		log.Printf("reload: %v", err)
-		return
-	}
-	if err := svc.Apply(cfg); err != nil {
+func reload(mgr *api.Manager, certs *certStore) {
+	if err := mgr.Reload(); err != nil {
 		log.Printf("reload: %v", err)
 		return
 	}
 	if err := certs.reload(); err != nil {
 		log.Printf("reload certificates: %v", err)
 	}
-	log.Printf("reload: %d zone(s)", len(svc.Zones.List()))
+	log.Printf("reload: %d zone(s)", len(mgr.Service().Zones.List()))
+}
+
+// listenAPI serves the management API and web panel. Changing api settings
+// needs a restart.
+func listenAPI(spec config.APISpec, mgr *api.Manager, stats *api.Stats, certs *certStore) (io.Closer, func() error, error) {
+	ln, err := net.Listen("tcp", spec.Addr)
+	if err != nil {
+		return nil, nil, err
+	}
+	scheme := "http"
+	if spec.CertFile != "" {
+		tlsConfig, err := certs.config(spec.CertFile, spec.KeyFile)
+		if err != nil {
+			ln.Close()
+			return nil, nil, err
+		}
+		ln = tls.NewListener(ln, server.WithHTTP2(tlsConfig))
+		scheme = "https"
+	}
+	srv := &http.Server{
+		Handler:           api.NewHandler(mgr, stats, api.Options{Token: spec.Token, Panel: web.FS()}),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
+	log.Printf("api and panel on %s://%s", scheme, spec.Addr)
+	return srv, func() error {
+		if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	}, nil
 }
 
 // listen binds l's socket immediately (so bind errors are fatal at startup)

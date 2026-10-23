@@ -176,7 +176,7 @@ func AccessRulesFromConfig(cfg *config.Config) (access.Rules, error) {
 	var err error
 	switch {
 	case spec.Allow != nil:
-		if rules.Allow, err = access.ParseNetworks(spec.Allow); err != nil {
+		if rules.Allow, err = access.ParseNetworks(*spec.Allow); err != nil {
 			return rules, err
 		}
 		if rules.Allow == nil {

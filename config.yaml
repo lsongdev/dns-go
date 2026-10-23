@@ -90,3 +90,8 @@ access:
       ids: [replace-with-a-random-secret]
     - name: living-room-tv
       networks: [192.168.1.50]
+
+# Management API (/api) and web panel (/). A non-loopback addr needs a token.
+api:
+  addr: "127.0.0.1:8080"
+  # token: "change-me"

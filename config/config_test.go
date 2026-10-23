@@ -59,7 +59,6 @@ func TestValidateErrors(t *testing.T) {
 		"forwarding no upstr": listens,
 		"bad upstream type":   listens + "upstreams: [{type: quic, addr: x}]",
 		"bad doh method":      listens + "upstreams: [{type: doh, addr: x, method: put}]",
-		"domain no data":      listens + upstream + "domains: [{domain: a.com}]",
 		"domain two sources":  listens + upstream + "domains: [{domain: a.com, zone_file: x, records: [y]}]",
 		"domain no name":      listens + upstream + "domains: [{records: [y]}]",
 		"bad kind":            listens + upstream + "domains: [{domain: a.com, kind: weird, records: [y]}]",
@@ -138,5 +137,48 @@ access:
 		if _, err := Parse([]byte(src)); err == nil {
 			t.Errorf("%s: expected error", name)
 		}
+	}
+}
+
+func TestAPIValidation(t *testing.T) {
+	up := "\nupstreams: [{type: udp, addr: \"1.1.1.1:53\"}]\n"
+	if _, err := Parse([]byte(listens + up + "api: {addr: \"127.0.0.1:8080\"}")); err != nil {
+		t.Fatalf("loopback API without token should be allowed: %v", err)
+	}
+	if _, err := Parse([]byte(listens + up + "api: {addr: \":8080\"}")); err == nil {
+		t.Fatal("public API without token must be rejected")
+	}
+	if _, err := Parse([]byte(listens + up + "api: {addr: \":8080\", token: s3cret}")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSaveAndClone(t *testing.T) {
+	cfg, err := Parse([]byte(listens + `
+upstreams: [{type: udp, addr: "1.1.1.1:53", timeout: 3s}]
+domains: [{domain: home.lan}]
+cache: {enabled: true, max_ttl: 1h}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	clone := cfg.Clone()
+	clone.Domains[0].Records = append(clone.Domains[0].Records, "x IN A 192.0.2.1")
+	if len(cfg.Domains[0].Records) != 0 {
+		t.Fatal("Clone shares slices")
+	}
+	path := t.TempDir() + "/c.yaml"
+	if err := clone.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Access.Allow != nil {
+		t.Fatal("omitted allow must stay omitted after Save")
+	}
+	if loaded.Domains[0].Records[0] != "x IN A 192.0.2.1" || loaded.Upstreams[0].Timeout.Duration() != 3*time.Second || loaded.Cache.MaxTTL.Duration() != time.Hour {
+		t.Fatalf("round trip lost data: %+v", loaded)
 	}
 }

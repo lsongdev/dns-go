@@ -4,6 +4,8 @@
 
 ```
 cmd/dns-go   命令行：读配置、开监听、SIGHUP 热加载、证书重载
+api          HTTP 管理 API（/api）：以配置文件为唯一数据源的变更、统计与查询日志
+web          嵌入的 Web 控制面板（Preact + htm，ES modules，无构建步骤）
 access       访问控制：网络 allow/deny 与客户端身份
 engine       解析引擎 Engine（实现 server.Handler）与按配置组装的 Service
 zone         zone 文件 / hosts 解析，以及可增删改查的 zone 存储 Store
