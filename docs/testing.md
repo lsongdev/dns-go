@@ -20,9 +20,9 @@ go vet ./...
 | `engine` | 完整请求路径：EDNS/BADVERS/AD、权威与转发、transparent+CNAME 追踪、过滤在缓存前、真实 UDP 截断、QueryEvent、Service 热加载 |
 | `config` | 默认值与各类校验错误、Save/Clone 往返 |
 | `access` | 判断顺序、ID 校验、规则拷贝、并发 |
-| `store` | 两种后端的统一契约（往返、失败回滚、清空）、配置文件保留注释与权限、SQLite 初始化与表结构约束 |
-| `api` | 鉴权、zone/记录/过滤/访问控制的增删改与持久化（配置文件和 SQLite 各跑一遍）、解析测试、统计与查询日志 |
-| `web` | 嵌入的面板文件齐全，所有相对 import 都能解析到文件 |
+| `store` | 两种后端的统一契约（往返、失败回滚、清空）、配置文件保留注释与权限、SQLite 初始化与表结构约束、共享数据库与旧表升级、服务设置的保存 |
+| `api` | 鉴权、zone/记录/过滤/访问控制的增删改与持久化（配置文件和 SQLite 各跑一遍）、Manager 的单条记录增删、解析测试、统计与查询日志 |
+| `web` | manifest 符合模块约定、所有相对 import 都能解析到文件、静态文件服务；共享数据库中的完整模块：在线修改服务设置并重绑监听、绑定失败的报告、独立运行的认证 |
 
 ## 端到端冒烟测试
 
@@ -47,13 +47,15 @@ curl -sSL -o testdata/blocklists/adguard-dns.txt \
 ## Web 面板端到端测试
 
 `scripts/panel-e2e.mjs` 通过 DevTools 协议驱动无头 Chrome，走一遍面板的主要操作：建 zone、加/改/删记录、
-校验错误提示、自定义规则逐行报错、检查域名、切换拦截方式、添加客户端、解析测试、从查询日志一键拦截。
+校验错误提示、自定义规则逐行报错、检查域名、切换拦截方式、添加客户端、解析测试、在线修改服务设置、从查询日志一键拦截。
 同时会收集页面上的 JS 异常，并把关键状态截图保存到输出目录。
 
-脚本会修改目标服务的配置，请只对一次性的实例运行（API 不设 token）：
+脚本会修改目标服务的配置，请只对一次性的、独立运行的实例运行（API 不设 token；挂载在面板里时 UI 位于 shadow root 中，脚本找不到元素）。
+查询日志一步需要至少一条经上游解析的查询，可以先用 `dig` 查一个公网域名：
 
 ```bash
 ./dns-go -config /tmp/throwaway.yaml &
+dig @127.0.0.1 -p 15353 example.com
 node scripts/panel-e2e.mjs http://127.0.0.1:8080 /tmp/panel-e2e
 ```
 

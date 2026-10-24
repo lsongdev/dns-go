@@ -3,10 +3,10 @@
 ## 包划分
 
 ```
-cmd/dns-go   命令行：读配置、开监听、SIGHUP 热加载、证书重载
-store        运行数据（zone、过滤、访问控制）的持久化：配置文件或 SQLite，可替换的后端
-api          HTTP 管理 API（/api）：经存储事务进行的变更、统计与查询日志
-web          嵌入的 Web 控制面板（Preact + htm，ES modules，无构建步骤）
+cmd/dns-go   命令行：读配置，用 web 组装服务，开管理 API，SIGHUP 热加载
+web          组装好的服务（面板模块）：监听的绑定与在线重绑、证书、独立运行的 HTTP 入口，以及嵌入的 UI（web/ui）
+store        运行数据（zone、过滤、访问控制）与服务设置的持久化：配置文件或 SQLite，可替换的后端
+api          HTTP 管理 API（相对路由）：经存储事务进行的变更、服务设置、统计与查询日志，以及供其它程序增删单条记录的 Manager 方法
 access       访问控制：网络 allow/deny 与客户端身份
 engine       解析引擎 Engine（实现 server.Handler）与按配置组装的 Service
 zone         zone 文件 / hosts 解析，以及可增删改查的 zone 存储 Store
@@ -103,3 +103,32 @@ svc.Access.Set(access.Rules{...}) / Rules() / Check(req)
 - 响应速率限制（RRL）与按客户端的查询限速；
 - 按客户端的策略（例如某个设备不过滤）：身份已经识别，策略尚未实现；
 - 拦截 CNAME cloaking（过滤只检查问题中的名字）。
+
+## 作为面板模块
+
+`web.DNS` 满足面板的模块约定（与 acme-go、docker-go、yabber 相同），不依赖任何面板代码：
+
+```go
+d, err := web.New(ctx, db, web.Options{   // db 可与其它模块共用；表名都以 dns_ 开头
+	Server:       defaults,                 // 首次运行时的服务设置，之后以数据库为准
+	DataDir:      dataDir,
+	Certificates: getCertificate,           // 可选：listens[].tls 为 true 的 DoT/DoH 监听使用
+})
+d.Start()                // 绑定监听；失败的监听显示在状态里，不影响其它部分
+d.Handler()              // 管理 API，相对路由，由面板挂载并负责认证
+d.Assets()               // UI，根目录有 manifest.json，入口 module.js 导出 mount(el, ctx)
+```
+
+服务设置（模式、监听、上游、缓存）在面板中修改后立即生效：`Reconfigure` 用新设置构建解析器，
+`Manager.Replace` 把当前数据装入并原子替换；监听的 DNS 处理器总是转发给当前的解析器，所以只有改动过的监听需要重新绑定。
+
+其它程序可以通过 `Manager` 增删单条记录，而不必了解 zone 的存储格式：
+
+```go
+mgr.ZoneFor("_acme-challenge.example.com")   // 包含该名字的最具体的可编辑 zone
+mgr.AddRecord(ctx, api.Record{Name: "_acme-challenge.example.com", TTL: 60, Type: "TXT", Data: `"token"`})
+mgr.RemoveRecord(ctx, record)                // 按名字、类型和数据匹配，忽略 TTL
+mgr.Lookup("app.example.com")                // 该名字已有的记录
+```
+
+独立运行时，`cmd/dns-go` 用 `web.Open` 组装同一个服务（服务设置来自配置文件，修改时写回），并通过 `Standalone(token)` 提供 UI 和 `/api`。

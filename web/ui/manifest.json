@@ -1,0 +1,18 @@
+{
+  "contract": 1,
+  "id": "dns",
+  "title": "DNS",
+  "icon": "◆",
+  "entry": "module.js",
+  "styles": ["style.css", "dns.css"],
+  "home": "/",
+  "nav": [
+    { "path": "/", "title": "仪表盘", "icon": "◎", "group": "概览" },
+    { "path": "/querylog", "title": "查询日志", "icon": "≡", "group": "概览" },
+    { "path": "/zones", "title": "区域", "icon": "◆", "group": "解析" },
+    { "path": "/filters", "title": "过滤规则", "icon": "⊘", "group": "解析" },
+    { "path": "/clients", "title": "客户端", "icon": "◉", "group": "解析" },
+    { "path": "/tools", "title": "工具", "icon": "⚒", "group": "系统" },
+    { "path": "/settings", "title": "服务设置", "icon": "⚙", "group": "系统" }
+  ]
+}

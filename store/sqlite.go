@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,10 +24,12 @@ import (
 // SQLiteAvailable reports whether this binary includes the SQLite backend.
 const SQLiteAvailable = true
 
-const schemaVersion = 1
-
-const schema = `
-CREATE TABLE zones (
+// Tables are prefixed "dns_" so the database can be shared with other
+// programs (a panel that hosts dns-go as a module passes its own); the
+// schema version is kept in dns_schema rather than PRAGMA user_version,
+// which belongs to the whole database.
+var migrations = []string{`
+CREATE TABLE dns_zones (
 	origin     TEXT PRIMARY KEY,           -- canonical, no trailing dot; '' is the root
 	kind       TEXT NOT NULL CHECK (kind IN ('static', 'transparent')),
 	zone_file  TEXT NOT NULL DEFAULT '',
@@ -34,18 +37,18 @@ CREATE TABLE zones (
 	position   INTEGER NOT NULL,
 	updated_at TEXT NOT NULL
 );
-CREATE TABLE records (
+CREATE TABLE dns_records (
 	id       INTEGER PRIMARY KEY,
-	origin   TEXT NOT NULL REFERENCES zones (origin) ON DELETE CASCADE ON UPDATE CASCADE,
+	origin   TEXT NOT NULL REFERENCES dns_zones (origin) ON DELETE CASCADE ON UPDATE CASCADE,
 	position INTEGER NOT NULL,
 	name     TEXT NOT NULL,                -- relative to origin, '@' for the apex
 	ttl      INTEGER NOT NULL,
 	type     TEXT NOT NULL,
 	data     TEXT NOT NULL                 -- RDATA in presentation format
 );
-CREATE INDEX records_by_zone ON records (origin, position);
-CREATE INDEX records_by_name ON records (name, type);
-CREATE TABLE filter_lists (
+CREATE INDEX dns_records_by_zone ON dns_records (origin, position);
+CREATE INDEX dns_records_by_name ON dns_records (name, type);
+CREATE TABLE dns_filter_lists (
 	name     TEXT PRIMARY KEY,
 	kind     TEXT NOT NULL CHECK (kind IN ('block', 'allow')),
 	url      TEXT NOT NULL DEFAULT '',
@@ -54,34 +57,39 @@ CREATE TABLE filter_lists (
 	refresh  TEXT NOT NULL DEFAULT '',     -- Go duration, '' for the default
 	position INTEGER NOT NULL
 );
-CREATE TABLE filter_rules (
+CREATE TABLE dns_filter_rules (
 	position INTEGER PRIMARY KEY,
 	rule     TEXT NOT NULL
 );
-CREATE TABLE clients (
+CREATE TABLE dns_clients (
 	name     TEXT PRIMARY KEY,
 	position INTEGER NOT NULL
 );
-CREATE TABLE client_ids (
+CREATE TABLE dns_client_ids (
 	id     TEXT PRIMARY KEY COLLATE NOCASE,
-	client TEXT NOT NULL REFERENCES clients (name) ON DELETE CASCADE ON UPDATE CASCADE
+	client TEXT NOT NULL REFERENCES dns_clients (name) ON DELETE CASCADE ON UPDATE CASCADE
 );
-CREATE TABLE client_networks (
-	client   TEXT NOT NULL REFERENCES clients (name) ON DELETE CASCADE ON UPDATE CASCADE,
+CREATE TABLE dns_client_networks (
+	client   TEXT NOT NULL REFERENCES dns_clients (name) ON DELETE CASCADE ON UPDATE CASCADE,
 	network  TEXT NOT NULL,
 	position INTEGER NOT NULL,
 	PRIMARY KEY (client, position)
 );
-CREATE TABLE settings (
+CREATE TABLE dns_settings (
 	key   TEXT PRIMARY KEY,
 	value TEXT NOT NULL                    -- JSON
 );
-`
+`}
+
+// legacyTables are the tables of the first, unprefixed schema (PRAGMA
+// user_version 1), renamed on first open.
+var legacyTables = []string{"zones", "records", "filter_lists", "filter_rules", "clients", "client_ids", "client_networks", "settings"}
 
 // SQLite stores config.Data in a SQLite database.
 type SQLite struct {
-	db *sql.DB
-	mu sync.Mutex
+	db    *sql.DB
+	owned bool // opened by OpenSQLite: Close closes the database
+	mu    sync.Mutex
 }
 
 // OpenSQLite opens (creating if needed) the database at path. A new
@@ -106,43 +114,115 @@ func OpenSQLite(path string, seed config.Data) (s *SQLite, seeded bool, err erro
 	// One connection: writes are rare and serialized anyway, and it keeps
 	// pragmas and transactions simple.
 	db.SetMaxOpenConns(1)
-	s = &SQLite{db: db}
-	defer func() {
-		if err != nil {
-			db.Close()
-		}
-	}()
-
-	ctx := context.Background()
-	var version int
-	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+	s, seeded, err = NewSQLite(context.Background(), db, seed)
+	if err != nil {
+		db.Close()
 		return nil, false, fmt.Errorf("store: open %s: %w", path, err)
 	}
-	switch version {
-	case schemaVersion:
-		return s, false, nil
-	case 0:
-	default:
-		return nil, false, fmt.Errorf("store: %s has schema version %d; this build supports %d", path, version, schemaVersion)
-	}
+	s.owned = true
+	return s, seeded, nil
+}
+
+// NewSQLite migrates dns-go's tables in db, which may be shared with other
+// programs and should have foreign keys enabled. A new schema is seeded
+// with seed; seeded reports whether that happened. The caller owns db.
+func NewSQLite(ctx context.Context, db *sql.DB, seed config.Data) (s *SQLite, seeded bool, err error) {
+	s = &SQLite{db: db}
 	err = s.inTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, schema); err != nil {
+		if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS dns_schema (version INTEGER NOT NULL)`); err != nil {
 			return err
 		}
-		seed.ApplyDefaults()
-		if err := write(ctx, tx, config.Data{}, seed); err != nil {
+		var version int
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM dns_schema`).Scan(&version); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", schemaVersion))
+		switch {
+		case version == len(migrations):
+			return nil
+		case version > len(migrations):
+			return fmt.Errorf("schema version %d is newer than this build supports (%d)", version, len(migrations))
+		}
+		if version == 0 {
+			legacy, err := upgradeLegacy(ctx, tx)
+			if err != nil {
+				return fmt.Errorf("upgrade unprefixed tables: %w", err)
+			}
+			if legacy {
+				version = 1
+			}
+		}
+		for i := version; i < len(migrations); i++ {
+			if _, err := tx.ExecContext(ctx, migrations[i]); err != nil {
+				return fmt.Errorf("migration %d: %w", i+1, err)
+			}
+			if i == 0 {
+				seed.ApplyDefaults()
+				if err := write(ctx, tx, config.Data{}, seed); err != nil {
+					return err
+				}
+				seeded = true
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM dns_schema`); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO dns_schema (version) VALUES (?)`, len(migrations))
 		return err
 	})
 	if err != nil {
-		return nil, false, fmt.Errorf("store: initialize %s: %w", path, err)
+		return nil, false, err
 	}
-	return s, true, nil
+	return s, seeded, nil
 }
 
-func (s *SQLite) Close() error { return s.db.Close() }
+// upgradeLegacy renames the tables of a database created by an earlier
+// dns-go (unprefixed, PRAGMA user_version 1) and reports whether it did.
+// Foreign keys follow the renamed tables. A shared database may hold
+// unrelated tables with the same names, so every legacy table must exist.
+func upgradeLegacy(ctx context.Context, tx *sql.Tx) (bool, error) {
+	var userVersion, found int
+	if err := tx.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&userVersion); err != nil {
+		return false, err
+	}
+	if userVersion != 1 {
+		return false, nil
+	}
+	query := `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN (?` + strings.Repeat(", ?", len(legacyTables)-1) + `)`
+	args := make([]any, len(legacyTables))
+	for i, t := range legacyTables {
+		args[i] = t
+	}
+	if err := tx.QueryRowContext(ctx, query, args...).Scan(&found); err != nil {
+		return false, err
+	}
+	if found != len(legacyTables) {
+		return false, nil
+	}
+	for _, t := range legacyTables {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE `+t+` RENAME TO dns_`+t); err != nil {
+			return false, err
+		}
+	}
+	for _, stmt := range []string{
+		`DROP INDEX records_by_zone`, `DROP INDEX records_by_name`,
+		`CREATE INDEX dns_records_by_zone ON dns_records (origin, position)`,
+		`CREATE INDEX dns_records_by_name ON dns_records (name, type)`,
+		`PRAGMA user_version = 0`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// Close closes the database if OpenSQLite opened it.
+func (s *SQLite) Close() error {
+	if s.owned {
+		return s.db.Close()
+	}
+	return nil
+}
 
 func (s *SQLite) Load(ctx context.Context) (config.Data, error) {
 	var d config.Data
@@ -201,7 +281,7 @@ func read(ctx context.Context, tx *sql.Tx) (config.Data, error) {
 }
 
 func readZones(ctx context.Context, tx *sql.Tx) ([]config.DomainSpec, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT origin, kind, zone_file, hosts_file FROM zones ORDER BY position`)
+	rows, err := tx.QueryContext(ctx, `SELECT origin, kind, zone_file, hosts_file FROM dns_zones ORDER BY position`)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +300,7 @@ func readZones(ctx context.Context, tx *sql.Tx) ([]config.DomainSpec, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	recs, err := tx.QueryContext(ctx, `SELECT origin, name, ttl, type, data FROM records ORDER BY origin, position`)
+	recs, err := tx.QueryContext(ctx, `SELECT origin, name, ttl, type, data FROM dns_records ORDER BY origin, position`)
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +322,7 @@ func readFilters(ctx context.Context, tx *sql.Tx) (config.FiltersSpec, error) {
 	if err := getSetting(ctx, tx, "filters.block_mode", &f.BlockMode); err != nil {
 		return f, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT name, kind, url, file, enabled, refresh FROM filter_lists ORDER BY position`)
+	rows, err := tx.QueryContext(ctx, `SELECT name, kind, url, file, enabled, refresh FROM dns_filter_lists ORDER BY position`)
 	if err != nil {
 		return f, err
 	}
@@ -271,7 +351,7 @@ func readFilters(ctx context.Context, tx *sql.Tx) (config.FiltersSpec, error) {
 	if err := rows.Err(); err != nil {
 		return f, err
 	}
-	rules, err := tx.QueryContext(ctx, `SELECT rule FROM filter_rules ORDER BY position`)
+	rules, err := tx.QueryContext(ctx, `SELECT rule FROM dns_filter_rules ORDER BY position`)
 	if err != nil {
 		return f, err
 	}
@@ -293,7 +373,7 @@ func readAccess(ctx context.Context, tx *sql.Tx) (config.AccessSpec, error) {
 			return a, err
 		}
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT name FROM clients ORDER BY position`)
+	rows, err := tx.QueryContext(ctx, `SELECT name FROM dns_clients ORDER BY position`)
 	if err != nil {
 		return a, err
 	}
@@ -311,7 +391,7 @@ func readAccess(ctx context.Context, tx *sql.Tx) (config.AccessSpec, error) {
 	if err := rows.Err(); err != nil {
 		return a, err
 	}
-	ids, err := tx.QueryContext(ctx, `SELECT client, id FROM client_ids ORDER BY rowid`)
+	ids, err := tx.QueryContext(ctx, `SELECT client, id FROM dns_client_ids ORDER BY rowid`)
 	if err != nil {
 		return a, err
 	}
@@ -327,7 +407,7 @@ func readAccess(ctx context.Context, tx *sql.Tx) (config.AccessSpec, error) {
 	if err := ids.Err(); err != nil {
 		return a, err
 	}
-	nets, err := tx.QueryContext(ctx, `SELECT client, network FROM client_networks ORDER BY client, position`)
+	nets, err := tx.QueryContext(ctx, `SELECT client, network FROM dns_client_networks ORDER BY client, position`)
 	if err != nil {
 		return a, err
 	}
@@ -344,7 +424,7 @@ func readAccess(ctx context.Context, tx *sql.Tx) (config.AccessSpec, error) {
 
 func getSetting(ctx context.Context, tx *sql.Tx, key string, dst any) error {
 	var raw string
-	err := tx.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&raw)
+	err := tx.QueryRowContext(ctx, `SELECT value FROM dns_settings WHERE key = ?`, key).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -388,20 +468,20 @@ func writeZones(ctx context.Context, tx *sql.Tx, old, next []config.DomainSpec) 
 		keep[origin] = true
 		prev, existed := before[origin]
 		if existed && reflect.DeepEqual(prev, z) {
-			if _, err := tx.ExecContext(ctx, `UPDATE zones SET position = ? WHERE origin = ?`, pos, origin); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE dns_zones SET position = ? WHERE origin = ?`, pos, origin); err != nil {
 				return err
 			}
 			continue
 		}
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO zones (origin, kind, zone_file, hosts_file, position, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+			INSERT INTO dns_zones (origin, kind, zone_file, hosts_file, position, updated_at) VALUES (?, ?, ?, ?, ?, ?)
 			ON CONFLICT (origin) DO UPDATE SET kind = excluded.kind, zone_file = excluded.zone_file,
 				hosts_file = excluded.hosts_file, position = excluded.position, updated_at = excluded.updated_at`,
 			origin, z.Kind, z.ZoneFile, z.HostsFile, pos, now)
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM records WHERE origin = ?`, origin); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM dns_records WHERE origin = ?`, origin); err != nil {
 			return err
 		}
 		for i, line := range z.Records {
@@ -409,7 +489,7 @@ func writeZones(ctx context.Context, tx *sql.Tx, old, next []config.DomainSpec) 
 			if err != nil {
 				return fmt.Errorf("zone %s: %q: %w", originName(origin), line, err)
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO records (origin, position, name, ttl, type, data) VALUES (?, ?, ?, ?, ?, ?)`,
+			if _, err := tx.ExecContext(ctx, `INSERT INTO dns_records (origin, position, name, ttl, type, data) VALUES (?, ?, ?, ?, ?, ?)`,
 				origin, i, r.Name, r.TTL, r.Type, r.Data); err != nil {
 				return err
 			}
@@ -417,7 +497,7 @@ func writeZones(ctx context.Context, tx *sql.Tx, old, next []config.DomainSpec) 
 	}
 	for origin := range before {
 		if !keep[origin] {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM zones WHERE origin = ?`, origin); err != nil {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM dns_zones WHERE origin = ?`, origin); err != nil {
 				return err
 			}
 		}
@@ -436,7 +516,7 @@ func writeFilters(ctx context.Context, tx *sql.Tx, f config.FiltersSpec) error {
 	if err := setSetting(ctx, tx, "filters.block_mode", f.BlockMode); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM filter_lists`); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM dns_filter_lists`); err != nil {
 		return err
 	}
 	for i, l := range f.Lists {
@@ -444,16 +524,16 @@ func writeFilters(ctx context.Context, tx *sql.Tx, f config.FiltersSpec) error {
 		if l.Refresh != 0 {
 			refresh = l.Refresh.Duration().String()
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO filter_lists (name, kind, url, file, enabled, refresh, position) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		if _, err := tx.ExecContext(ctx, `INSERT INTO dns_filter_lists (name, kind, url, file, enabled, refresh, position) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			l.Name, l.Kind, l.URL, l.File, l.IsEnabled(), refresh, i); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM filter_rules`); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM dns_filter_rules`); err != nil {
 		return err
 	}
 	for i, r := range f.Rules {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO filter_rules (position, rule) VALUES (?, ?)`, i, r); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO dns_filter_rules (position, rule) VALUES (?, ?)`, i, r); err != nil {
 			return err
 		}
 	}
@@ -466,20 +546,20 @@ func writeAccess(ctx context.Context, tx *sql.Tx, a config.AccessSpec) error {
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM clients`); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM dns_clients`); err != nil {
 		return err
 	}
 	for i, c := range a.Clients {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO clients (name, position) VALUES (?, ?)`, c.Name, i); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO dns_clients (name, position) VALUES (?, ?)`, c.Name, i); err != nil {
 			return err
 		}
 		for _, id := range c.IDs {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO client_ids (id, client) VALUES (?, ?)`, id, c.Name); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO dns_client_ids (id, client) VALUES (?, ?)`, id, c.Name); err != nil {
 				return fmt.Errorf("client %s: id %s: %w", c.Name, id, err)
 			}
 		}
 		for j, n := range c.Networks {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO client_networks (client, network, position) VALUES (?, ?, ?)`, c.Name, n, j); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO dns_client_networks (client, network, position) VALUES (?, ?, ?)`, c.Name, n, j); err != nil {
 				return err
 			}
 		}
@@ -492,6 +572,35 @@ func setSetting(ctx context.Context, tx *sql.Tx, key string, v any) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`, key, string(raw))
+	_, err = tx.ExecContext(ctx, `INSERT INTO dns_settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value`, key, string(raw))
 	return err
+}
+
+// serverKey is the dns_settings key holding config.Server, for hosts that
+// keep the server settings in the database (see ServerStore).
+const serverKey = "server"
+
+func (s *SQLite) LoadServer(ctx context.Context) (srv config.Server, ok bool, err error) {
+	err = s.inTx(ctx, func(tx *sql.Tx) error {
+		var raw string
+		err := tx.QueryRowContext(ctx, `SELECT value FROM dns_settings WHERE key = ?`, serverKey).Scan(&raw)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		ok = true
+		return json.Unmarshal([]byte(raw), &srv)
+	})
+	if ok {
+		srv.ApplyDefaults()
+	}
+	return srv, ok, err
+}
+
+func (s *SQLite) SaveServer(ctx context.Context, srv config.Server) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inTx(ctx, func(tx *sql.Tx) error { return setSetting(ctx, tx, serverKey, srv) })
 }

@@ -158,3 +158,31 @@ func TestConfigFileKeepsOtherSectionsAndComments(t *testing.T) {
 		t.Errorf("empty filters section kept:\n%s", raw)
 	}
 }
+
+func TestConfigFileSavesServerSettings(t *testing.T) {
+	path := writeConfig(t)
+	st := NewConfigFile(path)
+	ctx := context.Background()
+	srv, ok, err := st.LoadServer(ctx)
+	if err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	srv.Upstreams = append(srv.Upstreams, config.UpstreamSpec{Type: "dot", Addr: "1.1.1.1:853"})
+	if err := st.SaveServer(ctx, srv); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	for _, want := range []string{"# dns-go test config", "# panel", "1.1.1.1:853", "home.lan"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("rewritten config lost %q:\n%s", want, raw)
+		}
+	}
+	// Settings that make the file invalid are refused and change nothing.
+	srv.Upstreams = nil
+	if err := st.SaveServer(ctx, srv); err == nil {
+		t.Fatal("forwarding without upstreams accepted")
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(raw) {
+		t.Fatal("refused settings changed the file")
+	}
+}

@@ -11,8 +11,9 @@
 
 各平台都可以直接接入，不需要安装客户端：macOS、Windows、Linux、iOS、Android、路由器以及浏览器都支持普通 DNS 或 DoH/DoT。
 
-内置 Web 控制面板与 HTTP API（`api.addr`），可以管理 zone 与记录、过滤规则与订阅、客户端与访问控制，
+内置 Web 控制面板与 HTTP API（`api.addr`），可以管理 zone 与记录、过滤规则与订阅、客户端与访问控制、服务设置（监听、上游、缓存，在线生效），
 并提供仪表盘、查询日志和解析测试。面板文件嵌入在二进制中，可以离线使用。
+同一套服务和面板也可以作为模块挂载到其它面板中（如 OhMyServer），见 [docs/architecture.md](docs/architecture.md#作为面板模块)。
 
 依赖只有标准库和 `gopkg.in/yaml.v3`（面板使用随附的 Preact + htm，无构建步骤）。
 

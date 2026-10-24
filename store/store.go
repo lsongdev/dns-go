@@ -23,6 +23,17 @@ type Store interface {
 	Close() error
 }
 
+// ServerStore keeps config.Server, the DNS server's settings, where the
+// panel can change them at runtime: ConfigFile rewrites the config file's
+// server keys, SQLite keeps them in the database (for hosts that have no
+// config file).
+type ServerStore interface {
+	// LoadServer returns the stored settings with defaults applied; ok is
+	// false when none are stored yet.
+	LoadServer(ctx context.Context) (s config.Server, ok bool, err error)
+	SaveServer(ctx context.Context, s config.Server) error
+}
+
 // Opened describes how a store was opened, for startup logging.
 type Opened struct {
 	Store  Store

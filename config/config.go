@@ -3,6 +3,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -17,6 +18,30 @@ type Duration time.Duration
 func (d Duration) Duration() time.Duration { return time.Duration(d) }
 
 func (d Duration) MarshalYAML() (any, error) { return time.Duration(d).String(), nil }
+
+func (d Duration) MarshalJSON() ([]byte, error) {
+	if d == 0 {
+		return []byte(`""`), nil
+	}
+	return json.Marshal(time.Duration(d).String())
+}
+
+func (d *Duration) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return fmt.Errorf("duration must be a string (e.g. \"5s\", \"24h\"): %w", err)
+	}
+	if s == "" {
+		*d = 0
+		return nil
+	}
+	parsed, err := time.ParseDuration(s)
+	if err != nil {
+		return fmt.Errorf("invalid duration %q: %w", s, err)
+	}
+	*d = Duration(parsed)
+	return nil
+}
 
 func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 	var s string
@@ -36,25 +61,32 @@ const (
 	ModeForwarding    = "forwarding"
 )
 
-// Config is the whole file: process settings (fixed for the life of the
-// process) plus the inline Data, which is what the management API edits.
-// Where Data is kept at runtime is chosen by Storage; the rest of the
-// program only ever sees a Data value.
+// Config is the whole file: the DNS server's settings, settings of this
+// process (API, data directory, storage), and the inline Data, which is what
+// the management API edits. Where Data is kept at runtime is chosen by
+// Storage; the rest of the program only ever sees a Data value.
 type Config struct {
-	// Mode is "authoritative" (serve zones only, REFUSED elsewhere, no
-	// recursion) or "forwarding" (resolve through upstreams, with local
-	// zones, filtering, and caching). Default: forwarding.
-	Mode      string         `yaml:"mode"`
-	Listens   []ListenSpec   `yaml:"listens"`
-	Upstreams []UpstreamSpec `yaml:"upstreams,omitempty"`
-	Cache     CacheSpec      `yaml:"cache,omitempty"`
-	API       APISpec        `yaml:"api,omitempty"`
+	Server `yaml:",inline"`
+	API    APISpec `yaml:"api,omitempty"`
 	// DataDir holds downloaded filter lists and, by default, the database.
 	// Default: "data".
 	DataDir string      `yaml:"data_dir,omitempty"`
 	Storage StorageSpec `yaml:"storage,omitempty"`
 
 	Data `yaml:",inline"`
+}
+
+// Server is how the DNS server listens and resolves. Changing it rebuilds
+// the resolver and rebinds changed listeners, which the panel does in
+// place (see the settings endpoints).
+type Server struct {
+	// Mode is "authoritative" (serve zones only, REFUSED elsewhere, no
+	// recursion) or "forwarding" (resolve through upstreams, with local
+	// zones, filtering, and caching). Default: forwarding.
+	Mode      string         `yaml:"mode" json:"mode"`
+	Listens   []ListenSpec   `yaml:"listens" json:"listens"`
+	Upstreams []UpstreamSpec `yaml:"upstreams,omitempty" json:"upstreams"`
+	Cache     CacheSpec      `yaml:"cache,omitempty" json:"cache"`
 }
 
 // Data is the runtime-managed configuration: zones, filters, and access.
@@ -90,17 +122,25 @@ type APISpec struct {
 }
 
 type ListenSpec struct {
-	Type     string `yaml:"type"` // udp | tcp | dot | doh
-	Addr     string `yaml:"addr"`
-	CertFile string `yaml:"cert_file,omitempty"` // required for dot; doh without it serves plain HTTP
-	KeyFile  string `yaml:"key_file,omitempty"`
+	Type string `yaml:"type" json:"type"` // udp | tcp | dot | doh
+	Addr string `yaml:"addr" json:"addr"`
+	// CertFile and KeyFile serve TLS from files (required for dot unless
+	// TLS is set; doh without either serves plain HTTP).
+	CertFile string `yaml:"cert_file,omitempty" json:"cert_file,omitempty"`
+	KeyFile  string `yaml:"key_file,omitempty" json:"key_file,omitempty"`
+	// TLS serves TLS with certificates from the host program's certificate
+	// source (for example a certificate manager) instead of files.
+	TLS bool `yaml:"tls,omitempty" json:"tls,omitempty"`
 	// Hostname (dot, doh with TLS) enables client IDs from SNI: clients
 	// connecting to "{id}.<hostname>" are identified as {id}.
-	Hostname string `yaml:"hostname,omitempty"`
+	Hostname string `yaml:"hostname,omitempty" json:"hostname,omitempty"`
 	// TrustedProxies (doh) are reverse proxies whose X-Forwarded-For is
 	// believed. Entries are CIDRs, addresses, or "private".
-	TrustedProxies []string `yaml:"trusted_proxies,omitempty"`
+	TrustedProxies []string `yaml:"trusted_proxies,omitempty" json:"trusted_proxies,omitempty"`
 }
+
+// Secure reports whether the listener serves TLS.
+func (l ListenSpec) Secure() bool { return l.CertFile != "" || l.TLS }
 
 // AccessSpec controls who may query. Network entries are CIDRs, bare
 // addresses, or the keyword "private" (loopback, RFC 1918, CGNAT,
@@ -135,18 +175,18 @@ type DomainSpec struct {
 }
 
 type UpstreamSpec struct {
-	Type    string   `yaml:"type"` // udp | tcp | dot | doh
-	Addr    string   `yaml:"addr"`
-	Method  string   `yaml:"method,omitempty"` // doh: get | post
-	Timeout Duration `yaml:"timeout,omitempty"`
+	Type    string   `yaml:"type" json:"type"` // udp | tcp | dot | doh
+	Addr    string   `yaml:"addr" json:"addr"`
+	Method  string   `yaml:"method,omitempty" json:"method,omitempty"` // doh: get | post
+	Timeout Duration `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 }
 
 type CacheSpec struct {
-	Enabled     bool     `yaml:"enabled,omitempty"`
-	MinTTL      Duration `yaml:"min_ttl,omitempty"`
-	MaxTTL      Duration `yaml:"max_ttl,omitempty"`
-	NegativeTTL Duration `yaml:"negative_ttl,omitempty"`
-	MaxEntries  int      `yaml:"max_entries,omitempty"`
+	Enabled     bool     `yaml:"enabled,omitempty" json:"enabled"`
+	MinTTL      Duration `yaml:"min_ttl,omitempty" json:"min_ttl"`
+	MaxTTL      Duration `yaml:"max_ttl,omitempty" json:"max_ttl"`
+	NegativeTTL Duration `yaml:"negative_ttl,omitempty" json:"negative_ttl"`
+	MaxEntries  int      `yaml:"max_entries,omitempty" json:"max_entries"`
 }
 
 type FiltersSpec struct {
@@ -223,18 +263,7 @@ func Parse(data []byte) (*Config, error) {
 }
 
 func (c *Config) applyDefaults() {
-	if c.Mode == "" {
-		c.Mode = ModeForwarding
-	}
-	if c.Cache.MaxTTL == 0 {
-		c.Cache.MaxTTL = Duration(24 * time.Hour)
-	}
-	if c.Cache.NegativeTTL == 0 {
-		c.Cache.NegativeTTL = Duration(5 * time.Minute)
-	}
-	if c.Cache.MaxEntries == 0 {
-		c.Cache.MaxEntries = 10000
-	}
+	c.Server.ApplyDefaults()
 	if c.DataDir == "" {
 		c.DataDir = "data"
 	}
@@ -245,8 +274,24 @@ func (c *Config) applyDefaults() {
 		c.Storage.Path = filepath.Join(c.DataDir, "dns-go.db")
 	}
 	c.Data.ApplyDefaults()
-	for i := range c.Upstreams {
-		u := &c.Upstreams[i]
+}
+
+// ApplyDefaults fills omitted fields of s.
+func (s *Server) ApplyDefaults() {
+	if s.Mode == "" {
+		s.Mode = ModeForwarding
+	}
+	if s.Cache.MaxTTL == 0 {
+		s.Cache.MaxTTL = Duration(24 * time.Hour)
+	}
+	if s.Cache.NegativeTTL == 0 {
+		s.Cache.NegativeTTL = Duration(5 * time.Minute)
+	}
+	if s.Cache.MaxEntries == 0 {
+		s.Cache.MaxEntries = 10000
+	}
+	for i := range s.Upstreams {
+		u := &s.Upstreams[i]
 		if u.Type == "doh" && u.Method == "" {
 			u.Method = "post"
 		}
@@ -278,13 +323,29 @@ func (d *Data) ApplyDefaults() {
 }
 
 func (c *Config) Validate() error {
-	if c.Mode != ModeAuthoritative && c.Mode != ModeForwarding {
-		return fmt.Errorf("mode %q invalid (want %s or %s)", c.Mode, ModeAuthoritative, ModeForwarding)
+	if err := c.Server.Validate(); err != nil {
+		return err
 	}
-	if len(c.Listens) == 0 {
+	if err := c.API.validate(); err != nil {
+		return err
+	}
+	switch c.Storage.Type {
+	case StorageConfig, StorageSQLite:
+	default:
+		return fmt.Errorf("storage.type %q invalid (want config or sqlite)", c.Storage.Type)
+	}
+	return c.Data.Validate(c.Mode)
+}
+
+// Validate checks s, which must have its defaults applied.
+func (s *Server) Validate() error {
+	if s.Mode != ModeAuthoritative && s.Mode != ModeForwarding {
+		return fmt.Errorf("mode %q invalid (want %s or %s)", s.Mode, ModeAuthoritative, ModeForwarding)
+	}
+	if len(s.Listens) == 0 {
 		return fmt.Errorf("at least one listen required")
 	}
-	for i, l := range c.Listens {
+	for i, l := range s.Listens {
 		if l.Addr == "" {
 			return fmt.Errorf("listens[%d]: addr required", i)
 		}
@@ -296,11 +357,23 @@ func (c *Config) Validate() error {
 		if (l.CertFile == "") != (l.KeyFile == "") {
 			return fmt.Errorf("listens[%d]: cert_file and key_file must be set together", i)
 		}
-		if l.Type == "dot" && l.CertFile == "" {
-			return fmt.Errorf("listens[%d]: dot requires cert_file and key_file", i)
+		if l.TLS && l.CertFile != "" {
+			return fmt.Errorf("listens[%d]: tls and cert_file are mutually exclusive", i)
+		}
+		if l.TLS && l.Type != "dot" && l.Type != "doh" {
+			return fmt.Errorf("listens[%d]: tls only applies to dot and doh", i)
+		}
+		if l.Type == "dot" && !l.Secure() {
+			return fmt.Errorf("listens[%d]: dot requires cert_file and key_file, or tls", i)
+		}
+		if len(l.TrustedProxies) > 0 && l.Type != "doh" {
+			return fmt.Errorf("listens[%d]: trusted_proxies only applies to doh", i)
+		}
+		if l.Hostname != "" && !l.Secure() {
+			return fmt.Errorf("listens[%d]: hostname needs TLS (cert_file/key_file or tls)", i)
 		}
 	}
-	for i, u := range c.Upstreams {
+	for i, u := range s.Upstreams {
 		switch u.Type {
 		case "udp", "tcp", "dot", "doh":
 		default:
@@ -313,33 +386,30 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("upstreams[%d]: method %q invalid (want get or post)", i, u.Method)
 		}
 	}
-	if err := c.API.validate(); err != nil {
-		return err
-	}
-	for i, l := range c.Listens {
-		if len(l.TrustedProxies) > 0 && l.Type != "doh" {
-			return fmt.Errorf("listens[%d]: trusted_proxies only applies to doh", i)
-		}
-		if l.Hostname != "" && l.CertFile == "" {
-			return fmt.Errorf("listens[%d]: hostname needs TLS (cert_file/key_file)", i)
-		}
-	}
-	switch c.Storage.Type {
-	case StorageConfig, StorageSQLite:
-	default:
-		return fmt.Errorf("storage.type %q invalid (want config or sqlite)", c.Storage.Type)
-	}
-	switch c.Mode {
+	switch s.Mode {
 	case ModeAuthoritative:
-		if c.Cache.Enabled || len(c.Upstreams) > 0 {
+		if s.Cache.Enabled || len(s.Upstreams) > 0 {
 			return fmt.Errorf("authoritative mode cannot configure cache or upstreams")
 		}
 	case ModeForwarding:
-		if len(c.Upstreams) == 0 {
+		if len(s.Upstreams) == 0 {
 			return fmt.Errorf("forwarding mode requires at least one upstream")
 		}
 	}
-	return c.Data.Validate(c.Mode)
+	return nil
+}
+
+// Clone returns a deep copy of s.
+func (s Server) Clone() Server {
+	raw, err := yaml.Marshal(s)
+	if err != nil {
+		panic(err) // Server contains only marshalable fields
+	}
+	var out Server
+	if err := yaml.Unmarshal(raw, &out); err != nil {
+		panic(err)
+	}
+	return out
 }
 
 // Validate checks d for the given mode.

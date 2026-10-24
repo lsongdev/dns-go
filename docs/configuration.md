@@ -16,6 +16,9 @@ listens:
     cert_file: fullchain.pem  # dot 必填；doh 不填则以明文 HTTP 服务（放在反向代理后）
     key_file: privkey.pem
     hostname: dns.example.com # 可选：从 SNI "<id>.dns.example.com" 识别客户端（需泛域名证书）
+  - type: dot
+    addr: ":853"
+    tls: true                 # 不用证书文件，使用宿主程序提供的证书（例如面板中的证书管理器）
   - type: doh
     addr: "127.0.0.1:8053"
     trusted_proxies: [127.0.0.1]  # 反向代理的地址，信任其 X-Forwarded-For / X-Real-IP
@@ -82,10 +85,12 @@ hosts 格式（`0.0.0.0 name`）不属于过滤器，请用 `domains[].hosts_fil
 
 配置分为两部分：
 
-- **进程设置**：mode、listens、upstreams、cache、api、data_dir、storage。只从配置文件读取，修改后需要重启。
+- **服务设置**：mode、listens、upstreams、cache。可以在 Web 面板的“服务设置”中在线修改，立即生效（只重新绑定改动过的监听），并写回配置文件（只改写这四段）。
+- **进程设置**：api、data_dir、storage。只从配置文件读取，修改后需要重启。
 - **运行数据**：domains、filters、access。可以通过 Web 面板和 API 在线修改，存放位置由 `storage` 决定：
   - `config`（默认）：数据就存放在这个配置文件中。通过 API 修改时只会改写这三段，其它段落和注释保持原样；手工编辑后执行 `kill -HUP` 即可生效。
-  - `sqlite`：数据存放在数据库中（`zones`、`records`、`filter_lists`、`filter_rules`、`clients`、`client_ids`、`client_networks`、`settings` 这几张表）。
+  - `sqlite`：数据存放在数据库中（`dns_zones`、`dns_records`、`dns_filter_lists`、`dns_filter_rules`、`dns_clients`、`dns_client_ids`、`dns_client_networks`、`dns_settings` 这几张表，版本记录在 `dns_schema`；
+    表名带前缀，所以数据库可以与其它程序共用。早期版本创建的无前缀数据库会在首次打开时自动改名）。
     首次启动时，会用配置文件中的这三段初始化数据库；之后以数据库为准，配置文件里的这三段会被忽略，启动时会打印提示。
     数据库文件的权限为 0600，因为客户端 ID 属于密钥。备份时复制 `dns-go.db` 即可（建议先停服务，或使用 `sqlite3 .backup`）。
 
@@ -94,7 +99,7 @@ hosts 格式（`0.0.0.0 name`）不属于过滤器，请用 `domains[].hosts_fil
 ## 热加载
 
 `kill -HUP <pid>` 会从存储中重新加载运行数据（`config` 存储即重新读取配置文件），重新读取由文件加载的 zone，并重新加载 TLS 证书。
-新配置无效时会记录日志并继续使用旧配置。`mode`、`listens`、`upstreams` 和 cache 容量的修改需要重启。
+新配置无效时会记录日志并继续使用旧配置。`mode`、`listens`、`upstreams` 和 cache 不随 SIGHUP 重新读取：在面板中修改，或修改配置文件后重启。
 
 ## 访问控制
 

@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 
 	"github.com/lsongdev/dns-go/config"
@@ -21,6 +22,15 @@ type SQLite struct{}
 
 func OpenSQLite(path string, seed config.Data) (*SQLite, bool, error) { return nil, false, errNoSQLite }
 
+func NewSQLite(context.Context, *sql.DB, config.Data) (*SQLite, bool, error) {
+	return nil, false, errNoSQLite
+}
+
 func (*SQLite) Load(context.Context) (config.Data, error)              { return config.Data{}, errNoSQLite }
 func (*SQLite) Update(context.Context, func(*config.Data) error) error { return errNoSQLite }
 func (*SQLite) Close() error                                           { return nil }
+
+func (*SQLite) LoadServer(context.Context) (config.Server, bool, error) {
+	return config.Server{}, false, errNoSQLite
+}
+func (*SQLite) SaveServer(context.Context, config.Server) error { return errNoSQLite }

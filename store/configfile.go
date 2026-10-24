@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"gopkg.in/yaml.v3"
@@ -12,12 +13,16 @@ import (
 	"github.com/lsongdev/dns-go/config"
 )
 
-// dataKeys are the top-level config keys that hold config.Data.
-var dataKeys = []string{"domains", "filters", "access"}
+// dataKeys are the top-level config keys that hold config.Data, and
+// serverKeys those that hold config.Server.
+var (
+	dataKeys   = []string{"domains", "filters", "access"}
+	serverKeys = []string{"mode", "listens", "upstreams", "cache"}
+)
 
-// ConfigFile stores config.Data in the YAML config file. Updates rewrite
-// only the data sections; every other key keeps its formatting and
-// comments.
+// ConfigFile stores config.Data, and config.Server (ServerStore), in the
+// YAML config file. Updates rewrite only the sections they change; every
+// other key keeps its formatting and comments.
 type ConfigFile struct {
 	path string
 	mu   sync.Mutex
@@ -48,8 +53,35 @@ func (s *ConfigFile) Update(ctx context.Context, fn func(*config.Data) error) er
 	if err := fn(&data); err != nil {
 		return err
 	}
-	out, err := replaceDataSections(raw, data)
+	out, err := replaceSections(raw, dataKeys, data)
 	if err != nil {
+		return err
+	}
+	return writeAtomic(s.path, out)
+}
+
+func (s *ConfigFile) LoadServer(ctx context.Context) (config.Server, bool, error) {
+	cfg, err := config.Load(s.path)
+	if err != nil {
+		return config.Server{}, false, err
+	}
+	return cfg.Server, true, nil
+}
+
+// SaveServer rewrites the server keys. The result must still be a valid
+// config file; if not, the file is left alone.
+func (s *ConfigFile) SaveServer(ctx context.Context, srv config.Server) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	raw, err := os.ReadFile(s.path)
+	if err != nil {
+		return err
+	}
+	out, err := replaceSections(raw, serverKeys, srv)
+	if err != nil {
+		return err
+	}
+	if _, err := config.Parse(out); err != nil {
 		return err
 	}
 	return writeAtomic(s.path, out)
@@ -57,9 +89,10 @@ func (s *ConfigFile) Update(ctx context.Context, fn func(*config.Data) error) er
 
 func (s *ConfigFile) Close() error { return nil }
 
-// replaceDataSections swaps the data keys of the YAML document in raw for
-// those of data, appending keys that were absent and dropping empty ones.
-func replaceDataSections(raw []byte, data config.Data) ([]byte, error) {
+// replaceSections swaps the given top-level keys of the YAML document in
+// raw for those of v's encoding, appending keys that were absent and
+// dropping empty ones.
+func replaceSections(raw []byte, keys []string, v any) ([]byte, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
 		return nil, err
@@ -68,7 +101,7 @@ func replaceDataSections(raw []byte, data config.Data) ([]byte, error) {
 		return nil, fmt.Errorf("store: config file is not a YAML mapping")
 	}
 	var encoded yaml.Node
-	if err := encoded.Encode(data); err != nil {
+	if err := encoded.Encode(v); err != nil {
 		return nil, err
 	}
 	sections := map[string]*yaml.Node{}
@@ -81,7 +114,7 @@ func replaceDataSections(raw []byte, data config.Data) ([]byte, error) {
 	kept := root.Content[:0]
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		key, value := root.Content[i], root.Content[i+1]
-		if isDataKey(key.Value) {
+		if slices.Contains(keys, key.Value) {
 			seen[key.Value] = true
 			replacement, ok := sections[key.Value]
 			if !ok {
@@ -92,21 +125,12 @@ func replaceDataSections(raw []byte, data config.Data) ([]byte, error) {
 		kept = append(kept, key, value)
 	}
 	root.Content = kept
-	for _, k := range dataKeys {
+	for _, k := range keys {
 		if v, ok := sections[k]; ok && !seen[k] {
 			root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: k}, v)
 		}
 	}
 	return yaml.Marshal(&doc)
-}
-
-func isDataKey(k string) bool {
-	for _, d := range dataKeys {
-		if d == k {
-			return true
-		}
-	}
-	return false
 }
 
 // writeAtomic replaces path with data, keeping the file's permissions.

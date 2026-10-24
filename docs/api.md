@@ -1,17 +1,20 @@
 # HTTP 管理 API
 
 在配置中启用后，API 位于 `/api`，Web 控制面板位于 `/`。
-面板是 `web/static` 下的 ES modules（Preact + htm，已随附在 `web/static/vendor`），通过 `embed` 编译进二进制，没有构建步骤。
+面板是 `web/ui` 下的 ES modules（Preact + htm，已随附在 `web/ui/vendor`），通过 `embed` 编译进二进制，没有构建步骤。
 在开发时修改这些文件后需要重新编译。
 
 ```yaml
 api:
   addr: "127.0.0.1:8080"   # 监听在非回环地址时必须设置 token
-  token: "change-me"       # 请求头：Authorization: Bearer <token>
+  token: "change-me"       # API 客户端：Authorization: Bearer <token>；浏览器：HTTP basic 认证，密码为 token
   # cert_file / key_file：可选，直接以 HTTPS 提供
 ```
 
 `api.*` 的修改需要重启进程才能生效。
+
+API 的路由是相对的（`/status`、`/zones`……），独立运行时挂在 `/api` 下；作为面板模块时由面板挂载，
+认证也由面板负责（见 architecture.md 的“作为面板模块”）。下表按独立运行的路径列出。
 
 ## 一致性模型
 
@@ -39,7 +42,9 @@ API 修改的是运行数据（zone、过滤、访问控制），数据保存在
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/status` | 版本、模式、存储类型、运行时长、监听、上游、zone 数、过滤规则数、缓存条目数 |
+| GET | `/api/status` | 版本、模式、存储类型、运行时长、监听（含未能启动的原因 `error`）、上游、zone 数、过滤规则数、缓存条目数 |
+| GET | `/api/settings` | 服务设置：`mode`、`listens`、`upstreams`、`cache`，以及 `editable`（能否在线修改） |
+| PUT | `/api/settings` | 同样的结构：校验后立即重建解析器，只重新绑定改动过的监听，并保存（独立运行时写回配置文件） |
 | GET | `/api/stats?top=10&bucket=10` | 总数、按来源计数、24 小时序列（每 `bucket` 分钟一个点）、热门域名/被拦截域名/客户端 |
 | GET | `/api/querylog?limit=100&search=&source=&client=` | 查询日志，最新的在前（内存中保留 5000 条） |
 | POST | `/api/resolve` | `{"name","type","do"}`：走完整解析流程（不经过访问控制），返回应答、来源阶段和命中的规则 |
@@ -64,6 +69,9 @@ API 修改的是运行数据（zone、过滤、访问控制），数据保存在
 | PUT | `/api/access` | 整体替换访问控制 |
 
 由文件加载的 zone（`zone_file`、`hosts_file`）是只读的，修改时返回 409。
+服务设置不可在线修改时（库调用方未提供 `Reconfigure`），`PUT /api/settings` 返回 409。
+新的服务设置与现有数据冲突（例如切换到权威模式时还有过滤规则）时返回 400，什么都不会改变；
+监听绑定失败不会撤销修改，失败原因显示在 `/api/status` 的 `listens[].error` 中。
 过滤相关的端点只在转发模式下可用。
 
 ## 示例

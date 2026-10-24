@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/lsongdev/dns-go/config"
 	"github.com/lsongdev/dns-go/engine"
@@ -16,9 +17,9 @@ import (
 
 // Manager serializes changes to the runtime data.
 type Manager struct {
-	cfg   *config.Config // process settings; fixed for the life of the process
 	store store.Store
-	svc   *engine.Service
+	cfg   atomic.Pointer[config.Config] // process settings; replaced by Replace
+	svc   atomic.Pointer[engine.Service]
 
 	mu   sync.Mutex
 	data config.Data // what the service is running
@@ -26,18 +27,35 @@ type Manager struct {
 
 // NewManager loads the stored data into svc and returns a manager for it.
 func NewManager(ctx context.Context, cfg *config.Config, st store.Store, svc *engine.Service) (*Manager, error) {
-	m := &Manager{cfg: cfg, store: st, svc: svc}
+	m := &Manager{store: st}
+	m.cfg.Store(cfg)
+	m.svc.Store(svc)
 	if err := m.Reload(ctx); err != nil {
 		return nil, err
 	}
 	return m, nil
 }
 
-// Settings returns the process settings (listeners, upstreams, ...).
-func (m *Manager) Settings() *config.Config { return m.cfg }
+// Settings returns the process settings (listeners, upstreams, ...). The
+// returned value must not be modified.
+func (m *Manager) Settings() *config.Config { return m.cfg.Load() }
 
 // Service returns the running service.
-func (m *Manager) Service() *engine.Service { return m.svc }
+func (m *Manager) Service() *engine.Service { return m.svc.Load() }
+
+// Replace makes svc, built from cfg, the running service, after loading the
+// current data into it. If svc rejects the data (for example zones a new
+// mode does not allow) nothing changes. The previous service is returned
+// for the caller to close once nothing uses it.
+func (m *Manager) Replace(cfg *config.Config, svc *engine.Service) (*engine.Service, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := svc.Apply(m.data); err != nil {
+		return nil, &InvalidError{err}
+	}
+	m.cfg.Store(cfg)
+	return m.svc.Swap(svc), nil
+}
 
 // Data returns a copy of the running data.
 func (m *Manager) Data() config.Data {
@@ -59,7 +77,7 @@ func (m *Manager) Update(ctx context.Context, fn func(*config.Data) error) error
 			return err
 		}
 		d.ApplyDefaults()
-		if err := m.svc.Apply(*d); err != nil {
+		if err := m.Service().Apply(*d); err != nil {
 			return &InvalidError{err}
 		}
 		next := d.Clone()
@@ -68,7 +86,7 @@ func (m *Manager) Update(ctx context.Context, fn func(*config.Data) error) error
 	})
 	if err != nil {
 		if applied != nil {
-			if rollback := m.svc.Apply(m.data); rollback != nil {
+			if rollback := m.Service().Apply(m.data); rollback != nil {
 				return fmt.Errorf("%w (restoring previous data also failed: %v)", err, rollback)
 			}
 		}
@@ -87,7 +105,7 @@ func (m *Manager) Reload(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := m.svc.Apply(d); err != nil {
+	if err := m.Service().Apply(d); err != nil {
 		return err
 	}
 	m.data = d

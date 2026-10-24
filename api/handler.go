@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"net/http"
 	"runtime/debug"
 	"strconv"
@@ -25,16 +24,30 @@ const maxBodySize = 8 << 20
 // Options configures the HTTP handler.
 type Options struct {
 	// Token, when set, must be sent as "Authorization: Bearer <token>" on
-	// every /api request. Static panel files are served without it.
+	// every request. Hosts that authenticate requests themselves leave it
+	// empty.
 	Token string
-	// Panel holds the web panel's static files, served at "/". Nil serves
-	// only the API.
-	Panel fs.FS
-	// Version is reported by /api/status; empty uses the Go build info.
+	// Version is reported by /status; empty uses the Go build info.
 	Version string
+	// Listeners reports the DNS listeners and their state. Nil reports the
+	// configured listeners without state.
+	Listeners func() []ListenerStatus
+	// Reconfigure applies and stores new server settings: it rebuilds the
+	// resolver (Manager.Replace) and rebinds changed listeners. Nil makes
+	// the settings read-only.
+	Reconfigure func(ctx context.Context, s config.Server) error
 }
 
-// Handler serves /api and the panel.
+// ListenerStatus is one DNS listener and whether it is serving.
+type ListenerStatus struct {
+	Type  string `json:"type"`
+	Addr  string `json:"addr"`
+	TLS   bool   `json:"tls"`
+	Error string `json:"error,omitempty"` // why it is not serving
+}
+
+// Handler serves the management API with relative routes ("/status",
+// "/zones", ...), so it can be mounted under any prefix.
 type Handler struct {
 	mgr     *Manager
 	stats   *Stats
@@ -50,44 +63,43 @@ func NewHandler(mgr *Manager, stats *Stats, opts Options) *Handler {
 	}
 	h := &Handler{mgr: mgr, stats: stats, opts: opts, started: time.Now(), mux: http.NewServeMux()}
 	routes := map[string]func(*http.Request) (any, error){
-		"GET /api/status":                        h.status,
-		"GET /api/stats":                         h.statsSummary,
-		"GET /api/querylog":                      h.queryLog,
-		"POST /api/resolve":                      h.resolve,
-		"GET /api/zones":                         h.listZones,
-		"POST /api/zones":                        h.createZone,
-		"GET /api/zones/{zone}":                  h.getZone,
-		"PUT /api/zones/{zone}":                  h.putZone,
-		"DELETE /api/zones/{zone}":               h.deleteZone,
-		"POST /api/zones/{zone}/records":         h.addRecord,
-		"PUT /api/zones/{zone}/records/{id}":     h.putRecord,
-		"DELETE /api/zones/{zone}/records/{id}":  h.deleteRecord,
-		"GET /api/filters":                       h.getFilters,
-		"PUT /api/filters/rules":                 h.putRules,
-		"PUT /api/filters/block_mode":            h.putBlockMode,
-		"GET /api/filters/check":                 h.checkFilter,
-		"POST /api/filters/lists":                h.createList,
-		"PUT /api/filters/lists/{name}":          h.putList,
-		"DELETE /api/filters/lists/{name}":       h.deleteList,
-		"POST /api/filters/lists/{name}/refresh": h.refreshList,
-		"GET /api/access":                        h.getAccess,
-		"PUT /api/access":                        h.putAccess,
-		"DELETE /api/cache":                      h.flushCache,
+		"GET /settings":                      h.getSettings,
+		"PUT /settings":                      h.putSettings,
+		"GET /status":                        h.status,
+		"GET /stats":                         h.statsSummary,
+		"GET /querylog":                      h.queryLog,
+		"POST /resolve":                      h.resolve,
+		"GET /zones":                         h.listZones,
+		"POST /zones":                        h.createZone,
+		"GET /zones/{zone}":                  h.getZone,
+		"PUT /zones/{zone}":                  h.putZone,
+		"DELETE /zones/{zone}":               h.deleteZone,
+		"POST /zones/{zone}/records":         h.addRecord,
+		"PUT /zones/{zone}/records/{id}":     h.putRecord,
+		"DELETE /zones/{zone}/records/{id}":  h.deleteRecord,
+		"GET /filters":                       h.getFilters,
+		"PUT /filters/rules":                 h.putRules,
+		"PUT /filters/block_mode":            h.putBlockMode,
+		"GET /filters/check":                 h.checkFilter,
+		"POST /filters/lists":                h.createList,
+		"PUT /filters/lists/{name}":          h.putList,
+		"DELETE /filters/lists/{name}":       h.deleteList,
+		"POST /filters/lists/{name}/refresh": h.refreshList,
+		"GET /access":                        h.getAccess,
+		"PUT /access":                        h.putAccess,
+		"DELETE /cache":                      h.flushCache,
 	}
 	for pattern, fn := range routes {
 		h.mux.Handle(pattern, h.endpoint(fn))
 	}
-	h.mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+	h.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, errorBody{Error: "no such endpoint"})
 	})
-	if opts.Panel != nil {
-		h.mux.Handle("/", panelHandler(opts.Panel))
-	}
 	return h
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if strings.HasPrefix(r.URL.Path, "/api/") && !h.authorized(r) {
+	if !h.authorized(r) {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="dns-go"`)
 		writeJSON(w, http.StatusUnauthorized, errorBody{Error: "unauthorized"})
 		return
@@ -181,22 +193,16 @@ func decode(r *http.Request, v any) error {
 // ---- status, stats, query log, resolve ----
 
 type statusBody struct {
-	Version   string        `json:"version"`
-	Mode      string        `json:"mode"`
-	Storage   string        `json:"storage"`
-	Uptime    int64         `json:"uptime_seconds"`
-	Listens   []listenBody  `json:"listens"`
-	Upstreams []string      `json:"upstreams"`
-	Zones     int           `json:"zones"`
-	Filter    *filterCounts `json:"filter,omitempty"`
-	Cache     *cacheBody    `json:"cache,omitempty"`
-	Clients   int           `json:"clients"`
-}
-
-type listenBody struct {
-	Type string `json:"type"`
-	Addr string `json:"addr"`
-	TLS  bool   `json:"tls"`
+	Version   string           `json:"version"`
+	Mode      string           `json:"mode"`
+	Storage   string           `json:"storage"`
+	Uptime    int64            `json:"uptime_seconds"`
+	Listens   []ListenerStatus `json:"listens"`
+	Upstreams []string         `json:"upstreams"`
+	Zones     int              `json:"zones"`
+	Filter    *filterCounts    `json:"filter,omitempty"`
+	Cache     *cacheBody       `json:"cache,omitempty"`
+	Clients   int              `json:"clients"`
 }
 
 type filterCounts struct {
@@ -229,8 +235,12 @@ func (h *Handler) status(r *http.Request) (any, error) {
 		Zones:   len(svc.Zones.List()),
 		Clients: len(d.Access.Clients),
 	}
-	for _, l := range cfg.Listens {
-		out.Listens = append(out.Listens, listenBody{Type: l.Type, Addr: l.Addr, TLS: l.CertFile != ""})
+	if h.opts.Listeners != nil {
+		out.Listens = h.opts.Listeners()
+	} else {
+		for _, l := range cfg.Listens {
+			out.Listens = append(out.Listens, ListenerStatus{Type: l.Type, Addr: l.Addr, TLS: l.Secure()})
+		}
 	}
 	for _, u := range cfg.Upstreams {
 		out.Upstreams = append(out.Upstreams, u.Type+" "+u.Addr)
@@ -247,6 +257,36 @@ func (h *Handler) status(r *http.Request) (any, error) {
 		out.Cache = &cacheBody{Entries: svc.Cache.Len()}
 	}
 	return out, nil
+}
+
+// ---- server settings ----
+
+type settingsBody struct {
+	config.Server
+	// Editable reports whether PUT /settings is available.
+	Editable bool `json:"editable"`
+}
+
+func (h *Handler) getSettings(r *http.Request) (any, error) {
+	return settingsBody{Server: h.mgr.Settings().Server.Clone(), Editable: h.opts.Reconfigure != nil}, nil
+}
+
+func (h *Handler) putSettings(r *http.Request) (any, error) {
+	if h.opts.Reconfigure == nil {
+		return nil, &conflictError{"the server settings are read-only here; edit the config file and restart"}
+	}
+	var s config.Server
+	if err := decode(r, &s); err != nil {
+		return nil, err
+	}
+	s.ApplyDefaults()
+	if err := s.Validate(); err != nil {
+		return nil, &InvalidError{err}
+	}
+	if err := h.opts.Reconfigure(r.Context(), s); err != nil {
+		return nil, err
+	}
+	return h.getSettings(r)
 }
 
 func (h *Handler) statsSummary(r *http.Request) (any, error) {
