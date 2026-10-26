@@ -40,8 +40,8 @@ export async function request(client, method, path, body) {
 }
 
 const SOURCES = {
-  upstream: ['上游', 'blue'], cache: ['缓存', 'green'], zone: ['本地区域', 'green'], filter: ['已拦截', 'red'],
-  denied: ['拒绝访问', 'amber'], error: ['错误', 'red'], policy: ['策略', 'gray'], invalid: ['无效请求', 'gray'],
+  upstream: ['Upstream', 'blue'], cache: ['Cache', 'green'], zone: ['Local zone', 'green'], filter: ['Blocked', 'red'],
+  denied: ['Denied', 'amber'], error: ['Error', 'red'], policy: ['Policy', 'gray'], invalid: ['Invalid', 'gray'],
 };
 
 export const SOURCE_KEYS = Object.keys(SOURCES);
@@ -52,7 +52,7 @@ export function SourceBadge({ source }) {
   return html`<${Badge} tone=${tone}>${label}<//>`;
 }
 
-export const MODES = { forwarding: '转发解析', authoritative: '权威服务器' };
+export const MODES = { forwarding: 'Forwarding', authoritative: 'Authoritative' };
 
 export const RECORD_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SRV', 'PTR', 'CAA', 'HTTPS', 'SVCB', 'SOA', 'TLSA', 'DS', 'DNSKEY'];
 
@@ -69,10 +69,10 @@ export function uptime(seconds) {
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
   const m = Math.floor((seconds % 3600) / 60);
-  if (d) return `${d} 天 ${h} 小时`;
-  if (h) return `${h} 小时 ${m} 分`;
-  if (m) return `${m} 分钟`;
-  return `${seconds} 秒`;
+  if (d) return `${d}d ${h}h`;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m`;
+  return `${seconds}s`;
 }
 
 export function clock(iso) {

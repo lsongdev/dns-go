@@ -1,6 +1,6 @@
 import { html, useState } from '../lib/html.js';
 import { useAction } from '../lib/hooks.js';
-import { Page, Notice, Loading, Empty, toast } from '../lib/ui.js';
+import { Page, Notice, Loading, Empty, toast, Table } from '../lib/ui.js';
 import { usePanel } from '../lib/panel.js';
 import { useApi, useStatus, SourceBadge, SOURCE_KEYS, sourceLabel, clock, micros } from '../dns.js';
 
@@ -24,24 +24,24 @@ export default function QueryLog({ query, setQuery }) {
 
   const quickRule = rule => action.run(async () => {
     await addRule(api, rule);
-    toast(`已添加规则 ${rule}`, 'success');
+    toast(`Added the rule ${rule}`, 'success');
   });
 
-  return html`<${Page} title="查询日志" subtitle="最近 5000 条查询，最新的在前">
+  return html`<${Page} title="Query log" subtitle="The latest 5,000 queries, newest first">
     <div class="toolbar">
-      <input class="input" type="search" placeholder="搜索域名或客户端" value=${search}
-        onInput=${e => setQuery({ search: e.currentTarget.value.trim() })} aria-label="搜索" />
-      <select class="input" style="flex:0 0 auto" value=${source} onChange=${e => setQuery({ source: e.currentTarget.value })} aria-label="来源">
-        <option value="">全部来源</option>
+      <input class="input" type="search" placeholder="Search names or clients" value=${search}
+        onInput=${e => setQuery({ search: e.currentTarget.value.trim() })} aria-label="Search" />
+      <select class="input" style="flex:0 0 auto" value=${source} onChange=${e => setQuery({ source: e.currentTarget.value })} aria-label="Source">
+        <option value="">All sources</option>
         ${SOURCE_KEYS.map(s => html`<option value=${s}>${sourceLabel(s)}</option>`)}
       </select>
-      <label class="check"><input type="checkbox" checked=${live} onChange=${e => setLive(e.currentTarget.checked)} />实时刷新</label>
+      <label class="field-check"><input type="checkbox" checked=${live} onChange=${e => setLive(e.currentTarget.checked)} />Live</label>
     </div>
     <${Notice} error=${log.error || action.error} />
-    ${log.data === undefined ? (log.error ? null : html`<${Loading} />`) : !log.data.length ? html`<${Empty}>没有匹配的查询。<//>` : html`
-      <div class="table-wrap"><table class="table">
+    ${log.data === undefined ? (log.error ? null : html`<${Loading} />`) : !log.data.length ? html`<${Empty}>No matching queries.<//>` : html`
+      <${Table}>
         <thead><tr>
-          <th>时间</th><th>客户端</th><th>域名</th><th>类型</th><th>结果</th><th>来源</th><th class="num">耗时</th>${canFilter ? html`<th class="actions"></th>` : null}
+          <th>Time</th><th>Client</th><th>Name</th><th>Type</th><th>Result</th><th>Source</th><th class="num">Duration</th>${canFilter ? html`<th class="actions"></th>` : null}
         </tr></thead>
         <tbody>${log.data.map((e, i) => html`<tr key=${i} class=${e.source === 'filter' ? 'row-blocked' : ''}>
           <td class="nowrap muted">${clock(e.time)}</td>
@@ -60,12 +60,12 @@ export default function QueryLog({ query, setQuery }) {
           <td class="num muted">${micros(e.duration_us)}</td>
           ${canFilter ? html`<td class="actions">
             ${e.source === 'filter'
-              ? html`<button class="btn btn-sm" disabled=${action.busy} onClick=${() => quickRule(`@@||${e.name}^`)}>放行</button>`
+              ? html`<button class="button button-small" disabled=${action.busy} onClick=${() => quickRule(`@@||${e.name}^`)}>Allow</button>`
               : (e.source === 'upstream' || e.source === 'cache')
-                ? html`<button class="btn btn-sm btn-danger" disabled=${action.busy} onClick=${() => quickRule(`||${e.name}^`)}>拦截</button>`
+                ? html`<button class="button button-small button-danger" disabled=${action.busy} onClick=${() => quickRule(`||${e.name}^`)}>Block</button>`
                 : null}
           </td>` : null}
         </tr>`)}</tbody>
-      </table></div>`}
+      <//>`}
   <//>`;
 }
