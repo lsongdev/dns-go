@@ -39,7 +39,7 @@ export default function Settings() {
   return html`<${Page} title="Settings" subtitle="Saving rebuilds the resolver at once; only changed listeners rebind.">
     ${!editable ? html`<${Notice} tone="info">These settings are read-only: edit the configuration file and restart.<//>` : null}
     <form class="form" onSubmit=${save}>
-      <fieldset disabled=${!editable} style="border:0;padding:0;margin:0;display:grid;gap:16px">
+      <fieldset class="settings-fields" disabled=${!editable}>
         <div class="card">
           <label class="field-check"><input type="checkbox" checked=${draft.enabled}
             onChange=${e => set({ enabled: e.currentTarget.checked })} />Serve DNS</label>
@@ -106,7 +106,7 @@ function ListenRow({ value: l, state, onChange, onRemove }) {
     <select class="input" value=${l.type} onChange=${e => set({ type: e.currentTarget.value, tlsMode: e.currentTarget.value === 'dot' && l.tlsMode === 'none' ? 'host' : l.tlsMode })} aria-label="Type">
       ${TRANSPORTS.map(t => html`<option value=${t}>${t.toUpperCase()}</option>`)}
     </select>
-    <div>
+    <div class="spec-address">
       <input class="input mono" required value=${l.addr} placeholder=":53" onInput=${e => set({ addr: e.currentTarget.value })} aria-label="Address" />
       ${state ? html`<div style="margin-top:4px">${state.error
         ? html`<${Badge} tone="red" title=${state.error}>Down: ${state.error}<//>`
@@ -141,7 +141,7 @@ function UpstreamRow({ value: u, onChange, onRemove }) {
     <select class="input" value=${u.type} onChange=${e => set({ type: e.currentTarget.value })} aria-label="Type">
       ${TRANSPORTS.map(t => html`<option value=${t}>${t.toUpperCase()}</option>`)}
     </select>
-    <input class="input mono" required value=${u.addr} placeholder=${placeholder} onInput=${e => set({ addr: e.currentTarget.value })} aria-label="Address" />
+    <input class="input mono spec-address" required value=${u.addr} placeholder=${placeholder} onInput=${e => set({ addr: e.currentTarget.value })} aria-label="Address" />
     <button type="button" class="button button-ghost icon-button" aria-label="Remove" onClick=${onRemove}>✕</button>
     <div class="spec-extra">
       <${Field} label="Timeout"><input class="input" value=${u.timeout} placeholder="5s" onInput=${e => set({ timeout: e.currentTarget.value })} /><//>

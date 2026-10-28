@@ -2,7 +2,7 @@ import { html, useState } from '../lib/html.js';
 import { useAction } from '../lib/hooks.js';
 import { Page, Notice, Loading, Empty, Badge, Field, Modal, confirmDanger, Table } from '../lib/ui.js';
 import { usePanel } from '../lib/panel.js';
-import { useApi, useStatus, RECORD_TYPES, Link } from '../dns.js';
+import { useApi, useStatus, RECORD_TYPES } from '../dns.js';
 import { KINDS, zonePath } from './zones.js';
 
 const PLACEHOLDERS = {
@@ -13,7 +13,7 @@ const PLACEHOLDERS = {
 };
 
 export default function Zone({ params }) {
-  const { api, navigate } = usePanel();
+  const { api, navigate, href } = usePanel();
   const base = zonePath(params.zone);
   const zone = useApi(base);
   const status = useStatus();
@@ -30,9 +30,10 @@ export default function Zone({ params }) {
     action.run(async () => { await api.del(base); navigate('/zones'); });
   };
 
-  if (!z) return html`<${Page} title=${params.zone}>${zone.error ? html`<${Notice} error=${zone.error} />` : html`<${Loading} />`}<//>`;
+  if (!z) return html`<${Page} title=${params.zone} back=${{ href: href('/zones'), label: 'Zones' }}>${zone.error ? html`<${Notice} error=${zone.error} />` : html`<${Loading} />`}<//>`;
   return html`<${Page} title=${z.origin}
-    subtitle=${html`<${Link} to="/zones">← Zones<//> · ${z.editable ? KINDS[z.kind]?.[1] : `Loaded from ${z.path}; edit the file and reload the server (SIGHUP).`}`}
+    back=${{ href: href('/zones'), label: 'Zones' }}
+    subtitle=${z.editable ? KINDS[z.kind]?.[1] : `Loaded from ${z.path}; edit the file and reload the server (SIGHUP).`}
     actions=${z.editable ? html`
       ${status.data?.mode === 'forwarding' ? html`<select class="input" style="width:auto" value=${z.kind} onChange=${e => setKind(e.currentTarget.value)} aria-label="Zone kind">
         ${Object.entries(KINDS).map(([k, [label]]) => html`<option value=${k}>${label}</option>`)}

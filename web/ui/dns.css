@@ -56,8 +56,17 @@
 .copy-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .copy-row code { overflow-wrap: anywhere; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.settings-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
 .spec-row { display: grid; gap: 8px; grid-template-columns: 110px minmax(0, 1fr) auto; align-items: start; padding: 10px 0; border-top: 1px solid var(--border); }
 .spec-row:first-of-type { border-top: 0; }
+.spec-row > * { min-width: 0; }
+/* Bound the square button independently of the grid track's width. */
+.spec-row > .icon-button { width: calc(var(--input-font-size) * var(--input-line-height) + 2 * var(--control-padding-y) + 2 * var(--input-border-width)); justify-self: end; }
+.spec-address .badge { max-width: 100%; white-space: normal; overflow-wrap: anywhere; line-height: 1.5; text-align: left; border-radius: var(--radius-sm); }
 .spec-row .spec-extra { grid-column: 2 / -1; display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); }
-@media (max-width: 600px) { .spec-row { grid-template-columns: 1fr; } .spec-row .spec-extra { grid-column: 1; } }
+@media (max-width: 600px) {
+  .spec-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .spec-row > .icon-button { grid-column: 2; grid-row: 1; }
+  .spec-row > .spec-address, .spec-row .spec-extra { grid-column: 1 / -1; }
+}
 fieldset.field { border: 0; padding: 0; margin: 0; display: grid; gap: 10px; }
