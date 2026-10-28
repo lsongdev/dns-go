@@ -294,3 +294,50 @@ func TestStandaloneRequiresToken(t *testing.T) {
 		}
 	}
 }
+
+// A server turned off binds nothing, and turning it on or off again
+// through the API opens or closes its listeners.
+func TestTurningTheServerOnAndOff(t *testing.T) {
+	addr := freePort(t)
+	srv := authoritative(addr)
+	srv.Disabled = true
+	d, err := New(context.Background(), openDB(t), Options{Server: srv, DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if err := d.Start(); err != nil {
+		t.Fatal(err)
+	}
+	bound := func() bool {
+		conn, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			return true
+		}
+		conn.Close()
+		return false
+	}
+	var status struct {
+		Enabled bool              `json:"enabled"`
+		Listens []json.RawMessage `json:"listens"`
+	}
+	call(t, d.Handler(), "GET", "/status", "", &status)
+	if status.Enabled || len(status.Listens) != 0 || bound() {
+		t.Fatalf("off: status %+v, bound %v", status, bound())
+	}
+	on := authoritative(addr)
+	body, _ := json.Marshal(on)
+	if code := call(t, d.Handler(), "PUT", "/settings", string(body), nil); code != 200 {
+		t.Fatalf("turn on: %d", code)
+	}
+	call(t, d.Handler(), "GET", "/status", "", &status)
+	if !status.Enabled || len(status.Listens) != 1 || !bound() {
+		t.Fatalf("on: status %+v, bound %v", status, bound())
+	}
+	on.Disabled = true
+	body, _ = json.Marshal(on)
+	call(t, d.Handler(), "PUT", "/settings", string(body), nil)
+	if bound() {
+		t.Fatal("still bound after turning off")
+	}
+}

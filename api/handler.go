@@ -194,6 +194,7 @@ func decode(r *http.Request, v any) error {
 
 type statusBody struct {
 	Version   string           `json:"version"`
+	Enabled   bool             `json:"enabled"` // false: turned off, no listener bound
 	Mode      string           `json:"mode"`
 	Storage   string           `json:"storage"`
 	Uptime    int64            `json:"uptime_seconds"`
@@ -229,6 +230,7 @@ func (h *Handler) status(r *http.Request) (any, error) {
 	svc := h.mgr.Service()
 	out := statusBody{
 		Version: h.version(),
+		Enabled: !cfg.Disabled,
 		Mode:    cfg.Mode,
 		Storage: cfg.Storage.Type,
 		Uptime:  int64(time.Since(h.started).Seconds()),
@@ -237,10 +239,13 @@ func (h *Handler) status(r *http.Request) (any, error) {
 	}
 	if h.opts.Listeners != nil {
 		out.Listens = h.opts.Listeners()
-	} else {
+	} else if !cfg.Disabled {
 		for _, l := range cfg.Listens {
 			out.Listens = append(out.Listens, ListenerStatus{Type: l.Type, Addr: l.Addr, TLS: l.Secure()})
 		}
+	}
+	if out.Listens == nil {
+		out.Listens = []ListenerStatus{}
 	}
 	for _, u := range cfg.Upstreams {
 		out.Upstreams = append(out.Upstreams, u.Type+" "+u.Addr)

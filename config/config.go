@@ -80,6 +80,10 @@ type Config struct {
 // the resolver and rebinds changed listeners, which the panel does in
 // place (see the settings endpoints).
 type Server struct {
+	// Disabled keeps every listener closed: the API and the panel still
+	// work, but nothing answers DNS queries. Settings written before this
+	// field existed leave it false, so they keep serving.
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled"`
 	// Mode is "authoritative" (serve zones only, REFUSED elsewhere, no
 	// recursion) or "forwarding" (resolve through upstreams, with local
 	// zones, filtering, and caching). Default: forwarding.

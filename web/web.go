@@ -170,9 +170,9 @@ func (d *DNS) Reconfigure(ctx context.Context, srv config.Server) error {
 	}
 	old.Close()
 	if d.listeners != nil { // started: bring the listeners in line
-		d.rebind(srv.Listens)
+		d.rebind(serving(srv))
 	}
-	d.log.Info("dns: server settings changed", "mode", srv.Mode, "listeners", len(srv.Listens), "upstreams", len(srv.Upstreams))
+	d.log.Info("dns: server settings changed", "enabled", !srv.Disabled, "mode", srv.Mode, "listeners", len(srv.Listens), "upstreams", len(srv.Upstreams))
 	return nil
 }
 

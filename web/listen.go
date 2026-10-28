@@ -57,8 +57,12 @@ func (d *DNS) Start() error {
 		return errors.New("dns: already started")
 	}
 	d.listeners = []*listener{}
-	d.rebind(d.Manager.Settings().Listens)
-	d.warnOpenResolver()
+	d.rebind(serving(d.Manager.Settings().Server))
+	if d.Manager.Settings().Disabled {
+		d.log.Info("dns: the server is turned off; no listener is bound")
+	} else {
+		d.warnOpenResolver()
+	}
 	var errs []error
 	for _, l := range d.listeners {
 		if s := l.status(); s.Error != "" {
@@ -68,11 +72,20 @@ func (d *DNS) Start() error {
 	return errors.Join(errs...)
 }
 
+// serving returns the listeners srv binds: none while it is turned off.
+func serving(srv config.Server) []config.ListenSpec {
+	if srv.Disabled {
+		return nil
+	}
+	return srv.Listens
+}
+
 // rebind makes the running listeners match specs: unchanged ones keep
 // serving, removed ones close, and new ones bind after the removed ones
 // have released their ports. Callers hold d.mu.
 func (d *DNS) rebind(specs []config.ListenSpec) {
-	var kept, next []*listener
+	var kept []*listener
+	next := []*listener{} // non-nil: started, even with nothing to bind
 	for _, l := range d.listeners {
 		if containsSpec(specs, l.spec) && l.status().Error == "" && !containsListener(kept, l.spec) {
 			kept = append(kept, l)
@@ -119,6 +132,9 @@ func (d *DNS) bind(spec config.ListenSpec) *listener {
 func (d *DNS) Listeners() []api.ListenerStatus {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.Manager.Settings().Disabled {
+		return []api.ListenerStatus{}
+	}
 	if d.listeners == nil { // not started: report the configuration
 		var out []api.ListenerStatus
 		for _, spec := range d.Manager.Settings().Listens {

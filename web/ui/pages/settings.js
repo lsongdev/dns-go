@@ -41,6 +41,11 @@ export default function Settings() {
     <form class="form" onSubmit=${save}>
       <fieldset disabled=${!editable} style="border:0;padding:0;margin:0;display:grid;gap:16px">
         <div class="card">
+          <label class="field-check"><input type="checkbox" checked=${draft.enabled}
+            onChange=${e => set({ enabled: e.currentTarget.checked })} />Serve DNS</label>
+          <p class="field-hint" style="margin:8px 0 0">When off, no listener is bound and nothing answers queries; zones, filters and clients are kept.</p>
+        </div>
+        <div class="card">
           <h2>Mode</h2>
           <div class="choices">${Object.entries(MODES).map(([k, label]) => html`<label class="choice" key=${k}>
             <input type="radio" name="mode" checked=${draft.mode === k} onChange=${() => set({ mode: k, ...(k === 'authoritative' ? { upstreams: [], cache: { ...draft.cache, enabled: false } } : {}) })} />
@@ -152,6 +157,7 @@ function UpstreamRow({ value: u, onChange, onRemove }) {
 // toDraft turns API settings into form state; fromDraft reverses it.
 function toDraft(s) {
   return {
+    enabled: !s.disabled,
     mode: s.mode,
     listens: (s.listens || []).map(l => ({ ...l, tlsMode: tlsOf(l), proxiesText: (l.trusted_proxies || []).join('\n') })),
     upstreams: (s.upstreams || []).map(u => ({ ...u })),
@@ -172,5 +178,5 @@ function fromDraft(d) {
   const upstreams = d.mode === 'forwarding'
     ? d.upstreams.map(u => ({ type: u.type, addr: u.addr.trim(), timeout: u.timeout || '', ...(u.type === 'doh' ? { method: u.method || 'post' } : {}) }))
     : [];
-  return { mode: d.mode, listens, upstreams, cache: d.mode === 'forwarding' ? d.cache : { ...d.cache, enabled: false } };
+  return { disabled: !d.enabled, mode: d.mode, listens, upstreams, cache: d.mode === 'forwarding' ? d.cache : { ...d.cache, enabled: false } };
 }
