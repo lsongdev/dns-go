@@ -56,8 +56,7 @@ function CreateZone({ authoritative, onClose }) {
     });
   };
   return html`<${Modal} title="New zone" onClose=${onClose} footer=${html`
-    <span class="spacer"></span>
-    <button class="button" type="button" onClick=${onClose}>Cancel</button>
+        <button class="button" type="button" onClick=${onClose}>Cancel</button>
     <button class="button button-primary" type="submit" form="create-zone" disabled=${busy}>Create</button>`}>
     <form id="create-zone" class="form" onSubmit=${submit}>
       <${Notice} error=${error} />

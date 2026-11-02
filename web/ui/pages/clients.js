@@ -43,7 +43,7 @@ export default function Clients() {
             ${c.ids.map(id => html`<span class="tag mono" key=${id} title="Client ID">id: ${id.slice(0, 4)}…</span>`)}
             ${c.networks.map(n => html`<span class="tag mono" key=${n}>${n}</span>`)}
           </td>
-          <td class="actions"><span class="button-row">
+          <td class="actions"><span class="row-actions">
             <button class="button button-small" onClick=${() => setEditing({ index: i, client: structuredClone(c) })}>Edit</button>
             <button class="button button-small button-danger" disabled=${action.busy} onClick=${() => removeClient(i)}>Delete</button>
           </span></td>
@@ -90,7 +90,7 @@ function Networks({ access, mode, busy, onSave }) {
         </select>
       <//>
     </div>
-    <div class="form-actions"><button class="button button-primary" disabled=${busy}>Save</button></div>
+    <div class="button-actions"><button class="button button-primary" disabled=${busy}>Save</button></div>
   </form>`;
 }
 
@@ -111,8 +111,7 @@ function ClientForm({ index, client, listens, busy, error, onSave, onClose }) {
     onSave({ name: c.name.trim(), ids, networks: lines(c.networksText) });
   };
   return html`<${Modal} wide title=${index < 0 ? 'Add client' : `Edit ${client.name}`} onClose=${onClose} footer=${html`
-    <span class="spacer"></span>
-    <button class="button" type="button" onClick=${onClose}>Cancel</button>
+        <button class="button" type="button" onClick=${onClose}>Cancel</button>
     <button class="button button-primary" type="submit" form="client-form" disabled=${busy}>Save</button>`}>
     <form id="client-form" class="form" onSubmit=${submit}>
       <${Notice} error=${error} />

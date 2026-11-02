@@ -72,7 +72,7 @@ function FilterPage() {
               <td><${Badge} tone=${l.kind === 'allow' ? 'green' : 'gray'}>${l.kind === 'allow' ? 'Allow' : 'Block'}<//></td>
               <td class="num">${l.status ? number(l.status.rules) : '—'}</td>
               <td class="nowrap muted">${l.status?.updated_at ? ago(l.status.updated_at) : '—'}</td>
-              <td class="actions"><span class="button-row">
+              <td class="actions"><span class="row-actions">
                 <button class="button button-small" disabled=${action.busy || !l.enabled} onClick=${() => refresh(l)}>Refresh</button>
                 <button class="button button-small" onClick=${() => setForm({ isNew: false, list: { ...l, refresh: l.refresh || '' } })}>Edit</button>
                 <button class="button button-small button-danger" disabled=${action.busy} onClick=${() => remove(l)}>Delete</button>
@@ -107,8 +107,7 @@ function ListForm({ isNew, list, busy, error, onSave, onClose }) {
     onSave(source === 'url' ? { ...l, file: '' } : { ...l, url: '' });
   };
   return html`<${Modal} title=${isNew ? 'Add list' : `Edit ${l.name}`} onClose=${onClose} footer=${html`
-    <span class="spacer"></span>
-    <button class="button" type="button" onClick=${onClose}>Cancel</button>
+        <button class="button" type="button" onClick=${onClose}>Cancel</button>
     <button class="button button-primary" type="submit" form="list-form" disabled=${busy}>${isNew ? 'Add' : 'Save'}</button>`}>
     <form id="list-form" class="form" onSubmit=${submit}>
       <${Notice} error=${error} />

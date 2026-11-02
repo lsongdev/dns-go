@@ -50,7 +50,7 @@ export default function Zone({ params }) {
           <td class="num muted">${r.ttl}</td>
           <td class="mono data">${r.data}</td>
           ${z.editable ? html`<td class="actions">
-            <span class="button-row">
+            <span class="row-actions">
               <button class="button button-small" onClick=${() => setEditing({ id: r.id, record: { ...r } })}>Edit</button>
               <button class="button button-small button-danger" disabled=${action.busy} onClick=${() => remove(r)}>Delete</button>
             </span>
