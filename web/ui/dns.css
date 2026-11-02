@@ -70,3 +70,5 @@
   .spec-row > .spec-address, .spec-row .spec-extra { grid-column: 1 / -1; }
 }
 fieldset.field { border: 0; padding: 0; margin: 0; display: grid; gap: 10px; }
+
+.dns-client-fields { display: flex; flex-direction: column; gap: 16px; }

@@ -118,7 +118,7 @@ function ClientForm({ index, client, listens, busy, error, onSave, onClose }) {
       <${Field} label="Name" required>
         <input class="input" required value=${c.name} onInput=${e => set({ name: e.currentTarget.value })} placeholder="alice-laptop" autofocus />
       <//>
-      <div class="form-grid">
+      <div class="dns-client-fields">
         <${Field} label="Client IDs" hint=${html`Letters, digits and hyphens, one per line; on a public server, keep them like passwords.
           <button type="button" class="button button-ghost button-small" onClick=${() => set({ idsText: [...ids, randomID()].join('\n') })}>Generate another</button>`}>
           <textarea class="input" rows="2" value=${c.idsText} onInput=${e => set({ idsText: e.currentTarget.value })} />
