@@ -8,7 +8,7 @@ export default function Dashboard() {
   const st = status.data;
   const s = stats.data;
   const down = st?.enabled ? st.listens.filter(l => l.error) : [];
-  return html`<${Page} title="Dashboard" subtitle="Statistics live in memory and reset on restart">
+  return html`<${Page} title="Overview" subtitle="Statistics live in memory and reset on restart">
     <${Notice} error=${status.error || stats.error} />
     ${st && !st.enabled ? html`<${Notice} tone="info">The DNS server is off: nothing answers queries. Turn it on in <${Link} to="/settings">Settings<//>.<//>` : null}
     ${down.length ? html`<${Notice} tone="warn">

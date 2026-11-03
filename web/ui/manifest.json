@@ -7,7 +7,7 @@
   "styles": ["stylesheets.css", "style.css", "dns.css"],
   "home": "/",
   "nav": [
-    { "path": "/", "title": "Dashboard", "icon": "◎", "group": "Overview" },
+    { "path": "/", "title": "Overview", "icon": "◎", "group": "Overview" },
     { "path": "/querylog", "title": "Query Log", "icon": "≡", "group": "Overview" },
     { "path": "/zones", "title": "Zones", "icon": "◆", "group": "Resolution" },
     { "path": "/filters", "title": "Filters", "icon": "⊘", "group": "Resolution" },
