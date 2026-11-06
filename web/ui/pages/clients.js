@@ -1,8 +1,8 @@
-import { html, useEffect, useState } from '@lsongdev/panel/html.js';
-import { useAction } from '@lsongdev/panel/hooks.js';
+import { html, useEffect, useState } from '../lib/html.js';
+import { useAction } from '../lib/hooks.js';
 import { PageHeader, Alert, Loading, Empty, Field, CopyButton, toast, Table } from '@lsongdev/scripts/react/components/index.js';
-import { Modal } from '@lsongdev/panel/ui.js';
-import { usePanel } from '@lsongdev/panel/panel.js';
+import { Modal } from '../lib/ui.js';
+import { usePanel } from '../lib/panel.js';
 import { useApi, useStatus, randomID, lines } from '../dns.js';
 
 export default function Clients() {

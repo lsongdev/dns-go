@@ -1,7 +1,7 @@
-import { html, useState } from '@lsongdev/panel/html.js';
-import { useAction } from '@lsongdev/panel/hooks.js';
+import { html, useState } from '../lib/html.js';
+import { useAction } from '../lib/hooks.js';
 import { PageHeader, Alert, Badge, toast, Table } from '@lsongdev/scripts/react/components/index.js';
-import { usePanel } from '@lsongdev/panel/panel.js';
+import { usePanel } from '../lib/panel.js';
 import { useStatus, SourceBadge, micros, number } from '../dns.js';
 
 const TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SOA', 'HTTPS', 'SRV', 'PTR', 'CAA', 'DS', 'DNSKEY', 'ANY'];

@@ -1,4 +1,4 @@
-import { html } from '@lsongdev/panel/html.js';
+import { html } from '../lib/html.js';
 import { PageHeader, Alert, Loading, Empty, Badge } from '@lsongdev/scripts/react/components/index.js';
 import { useApi, useStatus, MODES, SOURCE_KEYS, sourceLabel, number, share, uptime, Link } from '../dns.js';
 

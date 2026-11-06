@@ -1,7 +1,7 @@
-import { html, useEffect, useState } from '@lsongdev/panel/html.js';
-import { useAction } from '@lsongdev/panel/hooks.js';
+import { html, useEffect, useState } from '../lib/html.js';
+import { useAction } from '../lib/hooks.js';
 import { PageHeader, Alert, Loading, Field, Badge, toast } from '@lsongdev/scripts/react/components/index.js';
-import { usePanel } from '@lsongdev/panel/panel.js';
+import { usePanel } from '../lib/panel.js';
 import { useApi, useStatus, MODES, lines } from '../dns.js';
 
 const MODE_HELP = {
