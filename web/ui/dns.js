@@ -3,7 +3,7 @@
 import { html } from '@lsongdev/panel/html.js';
 import { useResource } from '@lsongdev/panel/hooks.js';
 import { usePanel } from '@lsongdev/panel/panel.js';
-import { Badge } from '@lsongdev/panel/ui.js';
+import { Badge } from '@lsongdev/scripts/react/components/index.js';
 
 // useApi loads a GET endpoint of this module, polling every interval
 // milliseconds while it is positive.
@@ -40,16 +40,16 @@ export async function request(client, method, path, body) {
 }
 
 const SOURCES = {
-  upstream: ['Upstream', 'blue'], cache: ['Cache', 'green'], zone: ['Local zone', 'green'], filter: ['Blocked', 'red'],
-  denied: ['Denied', 'amber'], error: ['Error', 'red'], policy: ['Policy', 'gray'], invalid: ['Invalid', 'gray'],
+  upstream: ['Upstream', 'info'], cache: ['Cache', 'success'], zone: ['Local zone', 'success'], filter: ['Blocked', 'danger'],
+  denied: ['Denied', 'warning'], error: ['Error', 'danger'], policy: ['Policy', undefined], invalid: ['Invalid', undefined],
 };
 
 export const SOURCE_KEYS = Object.keys(SOURCES);
 export const sourceLabel = source => SOURCES[source]?.[0] || source;
 
 export function SourceBadge({ source }) {
-  const [label, tone] = SOURCES[source] || [source, 'gray'];
-  return html`<${Badge} tone=${tone}>${label}<//>`;
+  const [label, tone] = SOURCES[source] || [source, undefined];
+  return html`<${Badge} variant=${tone}>${label}<//>`;
 }
 
 export const MODES = { forwarding: 'Forwarding', authoritative: 'Authoritative' };

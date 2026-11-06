@@ -1,6 +1,7 @@
 import { html, useEffect, useState } from '@lsongdev/panel/html.js';
 import { useAction } from '@lsongdev/panel/hooks.js';
-import { Page, Notice, Loading, Empty, Field, Modal, CopyButton, confirmDanger, toast, Table } from '@lsongdev/panel/ui.js';
+import { PageHeader, Alert, Loading, Empty, Field, CopyButton, toast, Table } from '@lsongdev/scripts/react/components/index.js';
+import { Modal } from '@lsongdev/panel/ui.js';
 import { usePanel } from '@lsongdev/panel/panel.js';
 import { useApi, useStatus, randomID, lines } from '../dns.js';
 
@@ -24,16 +25,16 @@ export default function Clients() {
     else clients[editing.index] = client;
     if (await persist({ ...data, clients })) setEditing(null);
   };
-  const removeClient = i => confirmDanger(`Delete the client ${data.clients[i].name}?`) &&
+  const removeClient = i => window.confirm(`Delete the client ${data.clients[i].name}?`) &&
     persist({ ...data, clients: data.clients.filter((_, j) => j !== i) });
 
   if (!data || !status.data) {
-    return html`<${Page} title="Clients & access">${access.error || status.error ? html`<${Notice} error=${access.error || status.error} />` : html`<${Loading} />`}<//>`;
+    return html`<${PageHeader} title="Clients & access" />${access.error || status.error ? html`<${Alert} error=${access.error || status.error} />` : html`<${Loading} />`}`;
   }
-  return html`<${Page} title="Clients & access"
+  return html`<${PageHeader} title="Clients & access"
     subtitle="Checked in order: denied networks → client ID → client networks → allowed networks. Unknown client IDs are always refused."
-    actions=${html`<button class="button button-primary" onClick=${() => setEditing({ index: -1, client: { name: '', ids: [randomID()], networks: [] } })}>Add client</button>`}>
-    <${Notice} error=${!editing && action.error} />
+    actions=${html`<button class="button button-primary" onClick=${() => setEditing({ index: -1, client: { name: '', ids: [randomID()], networks: [] } })}>Add client</button>`} />
+    <${Alert} error=${!editing && action.error} />
     ${data.clients.length === 0 ? html`<${Empty}>No clients yet. A client names a device in the logs, or lets it query from anywhere with a secret ID.<//>` : html`
       <${Table}>
         <thead><tr><th>Name</th><th>Identified by</th><th class="actions"></th></tr></thead>
@@ -52,8 +53,7 @@ export default function Clients() {
     <${Networks} access=${data} mode=${status.data.mode} busy=${action.busy}
       onSave=${async next => { if (await persist(next)) toast('Access settings saved', 'success'); }} />
     ${editing ? html`<${ClientForm} ...${editing} listens=${status.data.listens} busy=${action.busy} error=${action.error}
-      onSave=${saveClient} onClose=${() => { setEditing(null); action.setError(null); }} />` : null}
-  <//>`;
+      onSave=${saveClient} onClose=${() => { setEditing(null); action.setError(null); }} />` : null}`;
 }
 
 function Networks({ access, mode, busy, onSave }) {
@@ -114,7 +114,7 @@ function ClientForm({ index, client, listens, busy, error, onSave, onClose }) {
         <button class="button" type="button" onClick=${onClose}>Cancel</button>
     <button class="button button-primary" type="submit" form="client-form" disabled=${busy}>Save</button>`}>
     <form id="client-form" class="form" onSubmit=${submit}>
-      <${Notice} error=${error} />
+      <${Alert} error=${error} />
       <${Field} label="Name" required>
         <input class="input" required value=${c.name} onInput=${e => set({ name: e.currentTarget.value })} placeholder="alice-laptop" autofocus />
       <//>

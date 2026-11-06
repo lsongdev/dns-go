@@ -1,5 +1,5 @@
 import { html } from '@lsongdev/panel/html.js';
-import { Page, Notice, Loading, Empty, Badge } from '@lsongdev/panel/ui.js';
+import { PageHeader, Alert, Loading, Empty, Badge } from '@lsongdev/scripts/react/components/index.js';
 import { useApi, useStatus, MODES, SOURCE_KEYS, sourceLabel, number, share, uptime, Link } from '../dns.js';
 
 export default function Dashboard() {
@@ -8,10 +8,10 @@ export default function Dashboard() {
   const st = status.data;
   const s = stats.data;
   const down = st?.enabled ? st.listens.filter(l => l.error) : [];
-  return html`<${Page} title="Overview" subtitle="Statistics live in memory and reset on restart">
-    <${Notice} error=${status.error || stats.error} />
-    ${st && !st.enabled ? html`<${Notice} tone="info">The DNS server is off: nothing answers queries. Turn it on in <${Link} to="/settings">Settings<//>.<//>` : null}
-    ${down.length ? html`<${Notice} tone="warn">
+  return html`<${PageHeader} title="Overview" subtitle="Statistics live in memory and reset on restart" />
+    <${Alert} error=${status.error || stats.error} />
+    ${st && !st.enabled ? html`<${Alert} variant="info">The DNS server is off: nothing answers queries. Turn it on in <${Link} to="/settings">Settings<//>.<//>` : null}
+    ${down.length ? html`<${Alert} variant="warning">
       ${down.map(l => html`<div key=${l.type + l.addr}>The ${l.type} listener on ${l.addr} is down: ${l.error}</div>`)}
       <${Link} to="/settings">Check the settings<//>
     <//>` : null}
@@ -41,10 +41,9 @@ export default function Dashboard() {
       <div class="card section">
         <h2>Listeners</h2>
         ${!st.enabled ? html`<p class="muted" style="margin:0">Off</p>` : null}
-        <div class="tags">${st.listens.map(l => html`<${Badge} key=${l.type + l.addr} tone=${l.error ? 'red' : 'green'} title=${l.error}>
+        <div class="tags">${st.listens.map(l => html`<${Badge} key=${l.type + l.addr} variant=${l.error ? 'danger' : 'success'} title=${l.error}>
           ${l.type}${l.tls ? '+tls' : ''} ${l.addr}<//>`)}</div>
-      </div>`}
-  <//>`;
+      </div>`}`;
 }
 
 function Stat({ label, value, sub }) {

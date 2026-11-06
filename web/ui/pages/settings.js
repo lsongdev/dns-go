@@ -1,6 +1,6 @@
 import { html, useEffect, useState } from '@lsongdev/panel/html.js';
 import { useAction } from '@lsongdev/panel/hooks.js';
-import { Page, Notice, Loading, Field, Badge, toast } from '@lsongdev/panel/ui.js';
+import { PageHeader, Alert, Loading, Field, Badge, toast } from '@lsongdev/scripts/react/components/index.js';
 import { usePanel } from '@lsongdev/panel/panel.js';
 import { useApi, useStatus, MODES, lines } from '../dns.js';
 
@@ -22,7 +22,7 @@ export default function Settings() {
   const [draft, setDraft] = useState(null);
   useEffect(() => { if (settings.data) setDraft(toDraft(settings.data)); }, [settings.data]);
 
-  if (!draft) return html`<${Page} title="Settings">${settings.error ? html`<${Notice} error=${settings.error} />` : html`<${Loading} />`}<//>`;
+  if (!draft) return html`<${PageHeader} title="Settings" />${settings.error ? html`<${Alert} error=${settings.error} />` : html`<${Loading} />`}`;
   const editable = settings.data.editable;
   const set = patch => setDraft(d => ({ ...d, ...patch }));
   const save = e => {
@@ -36,8 +36,8 @@ export default function Settings() {
   };
   const listenerState = l => status.data?.listens?.find(s => s.type === l.type && s.addr === l.addr);
 
-  return html`<${Page} title="Settings" subtitle="Saving rebuilds the resolver at once; only changed listeners rebind.">
-    ${!editable ? html`<${Notice} tone="info">These settings are read-only: edit the configuration file and restart.<//>` : null}
+  return html`<${PageHeader} title="Settings" subtitle="Saving rebuilds the resolver at once; only changed listeners rebind." />
+    ${!editable ? html`<${Alert} variant="info">These settings are read-only: edit the configuration file and restart.<//>` : null}
     <form class="form" onSubmit=${save}>
       <fieldset class="settings-fields" disabled=${!editable}>
         <div class="card">
@@ -90,13 +90,12 @@ export default function Settings() {
           </div>` : null}
         </div>` : null}
       </fieldset>
-      <${Notice} error=${action.error} />
+      <${Alert} error=${action.error} />
       ${editable ? html`<div class="button-actions">
         <button class="button button-primary" disabled=${action.busy}>Save and apply</button>
         <button class="button" type="button" onClick=${() => { setDraft(toDraft(settings.data)); action.setError(null); }}>Revert</button>
       </div>` : null}
-    </form>
-  <//>`;
+    </form>`;
 }
 
 function ListenRow({ value: l, state, onChange, onRemove }) {
@@ -109,8 +108,8 @@ function ListenRow({ value: l, state, onChange, onRemove }) {
     <div class="spec-address">
       <input class="input mono" required value=${l.addr} placeholder=":53" onInput=${e => set({ addr: e.currentTarget.value })} aria-label="Address" />
       ${state ? html`<div style="margin-top:4px">${state.error
-        ? html`<${Badge} tone="red" title=${state.error}>Down: ${state.error}<//>`
-        : html`<${Badge} tone="green">Running<//>`}</div>` : null}
+        ? html`<${Badge} variant="danger" title=${state.error}>Down: ${state.error}<//>`
+        : html`<${Badge} variant="success">Running<//>`}</div>` : null}
     </div>
     <button type="button" class="button button-ghost icon-button" aria-label="Remove" onClick=${onRemove}>✕</button>
     ${secure ? html`<div class="spec-extra">

@@ -1,6 +1,7 @@
 import { html, useEffect, useState } from '@lsongdev/panel/html.js';
 import { useAction } from '@lsongdev/panel/hooks.js';
-import { Page, Notice, Loading, Empty, Badge, Field, Modal, confirmDanger, toast, Table } from '@lsongdev/panel/ui.js';
+import { PageHeader, Alert, Loading, Empty, Badge, Field, toast, Table } from '@lsongdev/scripts/react/components/index.js';
+import { Modal } from '@lsongdev/panel/ui.js';
 import { usePanel } from '@lsongdev/panel/panel.js';
 import { useApi, useStatus, request, number, Link } from '../dns.js';
 import { ago } from '@lsongdev/panel/format.js';
@@ -20,9 +21,8 @@ const SUGGESTED = [
 export default function Filters() {
   const status = useStatus();
   if (status.data?.mode === 'authoritative') {
-    return html`<${Page} title="Filters">
-      <${Notice} tone="info">An authoritative server does not filter. To block ads, switch to forwarding in <${Link} to="/settings">Settings<//>.<//>
-    <//>`;
+    return html`<${PageHeader} title="Filters" />
+      <${Alert} variant="info">An authoritative server does not filter. To block ads, switch to forwarding in <${Link} to="/settings">Settings<//>.<//>`;
   }
   return html`<${FilterPage} />`;
 }
@@ -40,11 +40,11 @@ function FilterPage() {
   const listPath = l => `/filters/lists/${encodeURIComponent(l.name)}`;
   const toggle = l => update(() => api.put(listPath(l), { ...strip(l), enabled: !l.enabled }));
   const refresh = l => update(() => api.post(listPath(l) + '/refresh'));
-  const remove = l => confirmDanger(`Delete the list ${l.name}?`) && update(() => api.del(listPath(l)));
+  const remove = l => window.confirm(`Delete the list ${l.name}?`) && update(() => api.del(listPath(l)));
 
-  return html`<${Page} title="Filters"
-    subtitle=${html`AdBlock-style DNS rules: <code>||ads.example^</code> blocks a name and its subdomains, <code>@@||ok.example^</code> allows, and <code>$important</code> wins over allowing.`}>
-    <${Notice} error=${filters.error || (!form && action.error)} />
+  return html`<${PageHeader} title="Filters"
+    subtitle=${html`AdBlock-style DNS rules: <code>||ads.example^</code> blocks a name and its subdomains, <code>@@||ok.example^</code> allows, and <code>$important</code> wins over allowing.`} />
+    <${Alert} error=${filters.error || (!form && action.error)} />
     ${!f ? (filters.error ? null : html`<${Loading} />`) : html`
       <${CheckDomain} />
       <div class="card section">
@@ -69,7 +69,7 @@ function FilterPage() {
                 <div class="cell-sub truncate" style="max-width:420px" title=${l.url || l.file}>${l.url || l.file}</div>
                 ${l.status?.error ? html`<div class="small text-error">${l.status.error}</div>` : null}
               </td>
-              <td><${Badge} tone=${l.kind === 'allow' ? 'green' : 'gray'}>${l.kind === 'allow' ? 'Allow' : 'Block'}<//></td>
+              <td><${Badge} variant=${l.kind === 'allow' ? 'success' : undefined}>${l.kind === 'allow' ? 'Allow' : 'Block'}<//></td>
               <td class="num">${l.status ? number(l.status.rules) : '—'}</td>
               <td class="nowrap muted">${l.status?.updated_at ? ago(l.status.updated_at) : '—'}</td>
               <td class="actions"><span class="row-actions">
@@ -86,8 +86,7 @@ function FilterPage() {
       onSave=${async l => {
         const saved = await action.run(() => (form.isNew ? api.post('/filters/lists', strip(l)) : api.put(listPath(l), strip(l))));
         if (saved) { setCurrent(saved); setForm(null); filters.reload(); }
-      }} />` : null}
-  <//>`;
+      }} />` : null}`;
 }
 
 // strip keeps only the fields the API accepts for a list.
@@ -110,7 +109,7 @@ function ListForm({ isNew, list, busy, error, onSave, onClose }) {
         <button class="button" type="button" onClick=${onClose}>Cancel</button>
     <button class="button button-primary" type="submit" form="list-form" disabled=${busy}>${isNew ? 'Add' : 'Save'}</button>`}>
     <form id="list-form" class="form" onSubmit=${submit}>
-      <${Notice} error=${error} />
+      <${Alert} error=${error} />
       ${isNew ? html`<div class="chips"><span class="muted small">Popular:</span>
         ${SUGGESTED.map(s => html`<button type="button" class="button button-small" key=${s.name} onClick=${() => { setL(prev => ({ ...prev, ...s })); setSource('url'); }}>${s.name}</button>`)}
       </div>` : null}
@@ -164,7 +163,7 @@ function CustomRules({ rules, onSaved }) {
       onInput=${e => { setText(e.currentTarget.value); setDirty(true); }} />
     ${lineErrors.length
       ? html`<ul class="line-errors">${lineErrors.map(e => html`<li key=${e.line}>Line ${e.line}: <code>${e.rule}</code> — ${e.error}</li>`)}</ul>`
-      : html`<div style="margin-top:10px"><${Notice} error=${action.error} /></div>`}
+      : html`<div style="margin-top:10px"><${Alert} error=${action.error} /></div>`}
   </div>`;
 }
 
@@ -189,9 +188,9 @@ function CheckDomain() {
     </div>
     ${result ? html`<div class="result" style="margin-top:12px">
       <span class="mono">${result.name}</span>
-      <${Badge} tone=${verdict[result.action]?.[1] || 'gray'}>${verdict[result.action]?.[0] || result.action}<//>
+      <${Badge} variant=${verdict[result.action]?.[1] || undefined}>${verdict[result.action]?.[0] || result.action}<//>
       ${result.rule ? html`<code>${result.rule}</code> <span class="tag">${result.list}</span>` : null}
     </div>` : null}
-    <div style="margin-top:10px"><${Notice} error=${action.error} /></div>
+    <div style="margin-top:10px"><${Alert} error=${action.error} /></div>
   </form>`;
 }

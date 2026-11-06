@@ -1,6 +1,7 @@
 import { html, useState } from '@lsongdev/panel/html.js';
 import { useAction } from '@lsongdev/panel/hooks.js';
-import { Page, Notice, Loading, Empty, Badge, Field, Modal, confirmDanger, Table } from '@lsongdev/panel/ui.js';
+import { PageHeader, Alert, Loading, Empty, Badge, Field, Table } from '@lsongdev/scripts/react/components/index.js';
+import { Modal } from '@lsongdev/panel/ui.js';
 import { usePanel } from '@lsongdev/panel/panel.js';
 import { useApi, useStatus, RECORD_TYPES } from '../dns.js';
 import { KINDS, zonePath } from './zones.js';
@@ -26,12 +27,12 @@ export default function Zone({ params }) {
   const setKind = kind => mutate(() => api.put(base, { kind, records: z.record_list }));
   const remove = r => mutate(() => api.del(`${base}/records/${r.id}`));
   const removeZone = () => {
-    if (!confirmDanger(`Delete the zone ${z.origin} and all its records?`)) return;
+    if (!window.confirm(`Delete the zone ${z.origin} and all its records?`)) return;
     action.run(async () => { await api.del(base); navigate('/zones'); });
   };
 
-  if (!z) return html`<${Page} title=${params.zone} back=${{ href: href('/zones'), label: 'Zones' }}>${zone.error ? html`<${Notice} error=${zone.error} />` : html`<${Loading} />`}<//>`;
-  return html`<${Page} title=${z.origin}
+  if (!z) return html`<${PageHeader} title=${params.zone} back=${{ href: href('/zones'), label: 'Zones' }} />${zone.error ? html`<${Alert} error=${zone.error} />` : html`<${Loading} />`}`;
+  return html`<${PageHeader} title=${z.origin}
     back=${{ href: href('/zones'), label: 'Zones' }}
     subtitle=${z.editable ? KINDS[z.kind]?.[1] : `Loaded from ${z.path}; edit the file and reload the server (SIGHUP).`}
     actions=${z.editable ? html`
@@ -39,8 +40,8 @@ export default function Zone({ params }) {
         ${Object.entries(KINDS).map(([k, [label]]) => html`<option value=${k}>${label}</option>`)}
       </select>` : null}
       <button class="button button-primary" onClick=${() => setEditing({ id: '', record: { name: '', ttl: 300, type: 'A', data: '' } })}>Add record</button>
-      <button class="button button-danger" onClick=${removeZone}>Delete zone</button>` : null}>
-    <${Notice} error=${!editing && action.error} />
+      <button class="button button-danger" onClick=${removeZone}>Delete zone</button>` : null} />
+    <${Alert} error=${!editing && action.error} />
     ${z.record_list.length === 0 ? html`<${Empty}>No records yet.<//>` : html`
       <${Table}>
         <thead><tr><th>Name</th><th>Type</th><th class="num">TTL</th><th>Data</th>${z.editable ? html`<th class="actions"></th>` : null}</tr></thead>
@@ -64,8 +65,7 @@ export default function Zone({ params }) {
         const saved = await action.run(() => (editing.id ? api.put(`${base}/records/${editing.id}`, body) : api.post(`${base}/records`, body)));
         if (saved) { setCurrent(saved); setEditing(null); }
       }}
-      onClose=${() => { setEditing(null); action.setError(null); }} />` : null}
-  <//>`;
+      onClose=${() => { setEditing(null); action.setError(null); }} />` : null}`;
 }
 
 function RecordForm({ origin, initial, isNew, busy, error, onSave, onClose }) {
@@ -81,7 +81,7 @@ function RecordForm({ origin, initial, isNew, busy, error, onSave, onClose }) {
     <button class="button" type="button" onClick=${onClose}>Cancel</button>
     <button class="button button-primary" type="submit" form="record-form" disabled=${busy}>Save</button>`}>
     <form id="record-form" class="form" onSubmit=${e => { e.preventDefault(); onSave(r); }}>
-      <${Notice} error=${error} />
+      <${Alert} error=${error} />
       <${Field} label="Name" hint="@ for the zone itself">
         <span class="suffix"><input class="input mono" placeholder="@" value=${r.name} onInput=${set('name')} autofocus />${suffix ? html`<span>${suffix}</span>` : null}</span>
       <//>

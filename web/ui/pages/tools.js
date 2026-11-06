@@ -1,6 +1,6 @@
 import { html, useState } from '@lsongdev/panel/html.js';
 import { useAction } from '@lsongdev/panel/hooks.js';
-import { Page, Notice, Badge, toast, Table } from '@lsongdev/panel/ui.js';
+import { PageHeader, Alert, Badge, toast, Table } from '@lsongdev/scripts/react/components/index.js';
 import { usePanel } from '@lsongdev/panel/panel.js';
 import { useStatus, SourceBadge, micros, number } from '../dns.js';
 
@@ -28,7 +28,7 @@ export default function Tools() {
     status.reload();
   });
 
-  return html`<${Page} title="Tools">
+  return html`<${PageHeader} title="Tools" />
     <form class="card" onSubmit=${resolve}>
       <h2>Test a query</h2>
       <p class="muted" style="margin-top:0">Resolved like a client query, through zones, filters, cache and upstreams (skipping access control).</p>
@@ -40,7 +40,7 @@ export default function Tools() {
         <label class="field-check"><input type="checkbox" checked=${q.do} onChange=${e => set({ do: e.currentTarget.checked })} />DNSSEC</label>
         <button class="button button-primary" disabled=${action.busy}>Resolve</button>
       </div>
-      <div style="margin-top:12px"><${Notice} error=${action.error} /></div>
+      <div style="margin-top:12px"><${Alert} error=${action.error} /></div>
       ${result ? html`<${ResolveResult} r=${result} />` : null}
     </form>
     ${status.data?.cache ? html`<div class="card section">
@@ -48,9 +48,8 @@ export default function Tools() {
         <div><h2>Cache</h2><span class="muted">${number(status.data.cache.entries)} entries</span></div>
         <button class="button button-danger" disabled=${flush.busy} onClick=${flushCache}>Flush cache</button>
       </div>
-      <${Notice} error=${flush.error} />
-    </div>` : null}
-  <//>`;
+      <${Alert} error=${flush.error} />
+    </div>` : null}`;
 }
 
 function ResolveResult({ r }) {
@@ -58,7 +57,7 @@ function ResolveResult({ r }) {
   return html`<div class="section">
     <div class="result">
       <strong class="mono">${r.query.name}</strong> ${r.query.type}
-      <${Badge} tone=${r.rcode === 'NOERROR' ? 'green' : 'amber'}>${r.rcode}<//>
+      <${Badge} variant=${r.rcode === 'NOERROR' ? 'success' : 'warning'}>${r.rcode}<//>
       <${SourceBadge} source=${r.source} />
       ${r.flags.map(f => html`<span class="tag" key=${f}>${f}</span>`)}
       <span class="muted small">${micros(r.duration_us)}</span>

@@ -1,6 +1,6 @@
 import { html, useState } from '@lsongdev/panel/html.js';
 import { useAction } from '@lsongdev/panel/hooks.js';
-import { Page, Notice, Loading, Empty, toast, Table } from '@lsongdev/panel/ui.js';
+import { PageHeader, Alert, Loading, Empty, toast, Table } from '@lsongdev/scripts/react/components/index.js';
 import { usePanel } from '@lsongdev/panel/panel.js';
 import { useApi, useStatus, SourceBadge, SOURCE_KEYS, sourceLabel, clock, micros } from '../dns.js';
 
@@ -27,7 +27,7 @@ export default function QueryLog({ query, setQuery }) {
     toast(`Added the rule ${rule}`, 'success');
   });
 
-  return html`<${Page} title="Query log" subtitle="The latest 5,000 queries, newest first">
+  return html`<${PageHeader} title="Query log" subtitle="The latest 5,000 queries, newest first" />
     <div class="toolbar">
       <input class="input" type="search" placeholder="Search names or clients" value=${search}
         onInput=${e => setQuery({ search: e.currentTarget.value.trim() })} aria-label="Search" />
@@ -37,7 +37,7 @@ export default function QueryLog({ query, setQuery }) {
       </select>
       <label class="field-check"><input type="checkbox" checked=${live} onChange=${e => setLive(e.currentTarget.checked)} />Live</label>
     </div>
-    <${Notice} error=${log.error || action.error} />
+    <${Alert} error=${log.error || action.error} />
     ${log.data === undefined ? (log.error ? null : html`<${Loading} />`) : !log.data.length ? html`<${Empty}>No matching queries.<//>` : html`
       <${Table}>
         <thead><tr>
@@ -66,6 +66,5 @@ export default function QueryLog({ query, setQuery }) {
                 : null}
           </td>` : null}
         </tr>`)}</tbody>
-      <//>`}
-  <//>`;
+      <//>`}`;
 }
