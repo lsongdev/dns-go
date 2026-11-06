@@ -1,7 +1,7 @@
-import { html, useState } from '../lib/html.js';
-import { useAction } from '../lib/hooks.js';
-import { Page, Notice, Loading, Empty, Badge, Field, Modal, confirmDanger, Table } from '../lib/ui.js';
-import { usePanel } from '../lib/panel.js';
+import { html, useState } from '@lsongdev/panel/html.js';
+import { useAction } from '@lsongdev/panel/hooks.js';
+import { Page, Notice, Loading, Empty, Badge, Field, Modal, confirmDanger, Table } from '@lsongdev/panel/ui.js';
+import { usePanel } from '@lsongdev/panel/panel.js';
 import { useApi, useStatus, RECORD_TYPES } from '../dns.js';
 import { KINDS, zonePath } from './zones.js';
 

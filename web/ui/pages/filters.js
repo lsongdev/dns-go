@@ -1,9 +1,9 @@
-import { html, useEffect, useState } from '../lib/html.js';
-import { useAction } from '../lib/hooks.js';
-import { Page, Notice, Loading, Empty, Badge, Field, Modal, confirmDanger, toast, Table } from '../lib/ui.js';
-import { usePanel } from '../lib/panel.js';
+import { html, useEffect, useState } from '@lsongdev/panel/html.js';
+import { useAction } from '@lsongdev/panel/hooks.js';
+import { Page, Notice, Loading, Empty, Badge, Field, Modal, confirmDanger, toast, Table } from '@lsongdev/panel/ui.js';
+import { usePanel } from '@lsongdev/panel/panel.js';
 import { useApi, useStatus, request, number, Link } from '../dns.js';
-import { ago } from '../lib/format.js';
+import { ago } from '@lsongdev/panel/format.js';
 
 const BLOCK_MODES = {
   zero_ip: ['Answer 0.0.0.0 / ::', 'Empty answers for other types'],

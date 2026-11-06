@@ -1,9 +1,9 @@
 // dns-go UI helpers: API access, formatting and small components shared by
-// the pages. Generic components are in lib/.
-import { html } from './lib/html.js';
-import { useResource } from './lib/hooks.js';
-import { usePanel } from './lib/panel.js';
-import { Badge } from './lib/ui.js';
+// the pages. Generic components come from @lsongdev/panel.
+import { html } from '@lsongdev/panel/html.js';
+import { useResource } from '@lsongdev/panel/hooks.js';
+import { usePanel } from '@lsongdev/panel/panel.js';
+import { Badge } from '@lsongdev/panel/ui.js';
 
 // useApi loads a GET endpoint of this module, polling every interval
 // milliseconds while it is positive.

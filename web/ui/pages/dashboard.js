@@ -1,5 +1,5 @@
-import { html } from '../lib/html.js';
-import { Page, Notice, Loading, Empty, Badge } from '../lib/ui.js';
+import { html } from '@lsongdev/panel/html.js';
+import { Page, Notice, Loading, Empty, Badge } from '@lsongdev/panel/ui.js';
 import { useApi, useStatus, MODES, SOURCE_KEYS, sourceLabel, number, share, uptime, Link } from '../dns.js';
 
 export default function Dashboard() {
