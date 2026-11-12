@@ -90,7 +90,7 @@ function Networks({ access, mode, busy, onSave }) {
         </select>
       <//>
     </div>
-    <div class="button-actions"><button class="button button-primary" disabled=${busy}>Save</button></div>
+    <div class="form-actions"><button class="button button-primary" disabled=${busy}>Save</button></div>
   </form>`;
 }
 

@@ -91,7 +91,7 @@ export default function Settings() {
         </div>` : null}
       </fieldset>
       <${Alert} error=${action.error} />
-      ${editable ? html`<div class="button-actions">
+      ${editable ? html`<div class="form-actions">
         <button class="button button-primary" disabled=${action.busy}>Save and apply</button>
         <button class="button" type="button" onClick=${() => { setDraft(toDraft(settings.data)); action.setError(null); }}>Revert</button>
       </div>` : null}
